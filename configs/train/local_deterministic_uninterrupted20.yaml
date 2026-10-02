@@ -1,0 +1,2 @@
+extends: local_uninterrupted20_seeded.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/local-deterministic-uninterrupted20

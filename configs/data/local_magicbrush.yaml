@@ -1,0 +1,3 @@
+name: local_magicbrush
+manifest: ${MAGICBRUSH_ROOT}/manifest.jsonl
+mask_semantics: edit_region

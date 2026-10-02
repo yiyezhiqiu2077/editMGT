@@ -1,0 +1,6 @@
+model_root: ${EDITMGT_MODEL_ROOT}
+magicbrush_root: ${MAGICBRUSH_ROOT}
+interedit_root: ${INTEREDIT_ROOT}
+allow_download_model_and_magicbrush: false
+allow_download_interedit: false
+interedit_only_better_data: true

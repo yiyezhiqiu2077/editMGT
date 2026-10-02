@@ -1,0 +1,2 @@
+extends: local_one_step.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/local-final-one-step

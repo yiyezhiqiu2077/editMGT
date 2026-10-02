@@ -1,0 +1,5 @@
+extends: _cluster_8g_base.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/stage-b-mixed
+warmup_steps: 100
+corruption: {mode: mixed, roi_probability: 0.85, full_roi_mask_probability: 0.15, persistent_conditioning: true}
+run_type: warm_start

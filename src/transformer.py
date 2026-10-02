@@ -25,8 +25,9 @@ from diffusers.models.resnet import Downsample2D, Upsample2D
 from diffusers.models.normalization import RMSNorm
 from diffusers.models.embeddings import TimestepEmbedding, get_timestep_embedding
 from peft import LoraConfig
-from src.v2_utils import MLPProjector, LinearProjector, FusedMLPProjector, PerceiverResampler, ConFluxAttnProcessor2_0, enable_lora
+from src.v2_utils import MLPProjector, LinearProjector, FusedMLPProjector, PerceiverResampler, ConFluxAttnProcessor2_0, enable_lora, resolve_lora_scope
 from src.dataset_utils import get_encode_hidden_state_len
+from src.explicit_region.conditioning import add_region_condition
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -98,22 +99,28 @@ class SingleTransformerBlock(nn.Module):
         reference_temb=None,
         reference_image_rotary_emb=None,
         lora_part_enable: Optional[bool] = False,
+        lora_scope: Optional[str] = None,
     ):
+        scope = resolve_lora_scope(lora_scope, lora_part_enable)
+        target_lora_enabled = scope in {"target_only", "both"}
+        reference_lora_enabled = scope in {"reference_only", "both"}
         residual = hidden_states  # torch.Size([2, 1280, 1024]) for either 1024 or 512
-        with enable_lora((self.norm.linear, self.proj_mlp), not lora_part_enable):
+        with enable_lora((self.norm.linear, self.proj_mlp), target_lora_enabled):
             norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
             mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
 
         if reference_image_hidden_states is not None:
             reference_residual = reference_image_hidden_states
-            reference_norm_hidden_states, reference_gate = self.norm(reference_image_hidden_states, emb=reference_temb)
-            reference_mlp_hidden_states = self.act_mlp(self.proj_mlp(reference_norm_hidden_states))  
+            with enable_lora((self.norm.linear, self.proj_mlp), reference_lora_enabled):
+                reference_norm_hidden_states, reference_gate = self.norm(reference_image_hidden_states, emb=reference_temb)
+                reference_mlp_hidden_states = self.act_mlp(self.proj_mlp(reference_norm_hidden_states))
             attn_output, reference_attn_output = self.attn(
                 hidden_states=norm_hidden_states,
                 image_rotary_emb=image_rotary_emb,
                 reference_image_hidden_states=reference_norm_hidden_states if reference_image_hidden_states is not None else None,
                 reference_image_rotary_emb=reference_image_rotary_emb if reference_image_hidden_states is not None else None,
                 lora_part_enable=lora_part_enable,
+                lora_scope=scope,
             )
         else:
             attn_output = self.attn(
@@ -121,7 +128,7 @@ class SingleTransformerBlock(nn.Module):
                 image_rotary_emb=image_rotary_emb,
             )
 
-        with enable_lora((self.proj_out,), not lora_part_enable):
+        with enable_lora((self.proj_out,), target_lora_enabled):
             hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
             gate = gate.unsqueeze(1)
             hidden_states = gate * self.proj_out(hidden_states)
@@ -132,7 +139,8 @@ class SingleTransformerBlock(nn.Module):
         if reference_image_hidden_states is not None:
             reference_image_hidden_states = torch.cat([reference_attn_output, reference_mlp_hidden_states], dim=2)
             reference_gate = reference_gate.unsqueeze(1)
-            reference_image_hidden_states = reference_gate * self.proj_out(reference_image_hidden_states)
+            with enable_lora((self.proj_out,), reference_lora_enabled):
+                reference_image_hidden_states = reference_gate * self.proj_out(reference_image_hidden_states)
             reference_image_hidden_states = reference_residual + reference_image_hidden_states
             return hidden_states, reference_image_hidden_states
         else:
@@ -191,8 +199,12 @@ class TransformerBlock(nn.Module):
         reference_temb=None,
         reference_image_rotary_emb=None, 
         lora_part_enable: Optional[bool] = False,
+        lora_scope: Optional[str] = None,
     ):
-        with enable_lora((self.norm1.linear,), not lora_part_enable):
+        scope = resolve_lora_scope(lora_scope, lora_part_enable)
+        target_lora_enabled = scope in {"target_only", "both"}
+        reference_lora_enabled = scope in {"reference_only", "both"}
+        with enable_lora((self.norm1.linear,), target_lora_enabled):
             norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
@@ -201,9 +213,10 @@ class TransformerBlock(nn.Module):
 
         # Attention.
         if reference_image_hidden_states is not None:
-            reference_norm_hidden_states, reference_gate_msa, reference_shift_mlp, reference_scale_mlp, reference_gate_mlp = self.norm1(
-                reference_image_hidden_states, emb=reference_temb
-            )
+            with enable_lora((self.norm1.linear,), reference_lora_enabled):
+                reference_norm_hidden_states, reference_gate_msa, reference_shift_mlp, reference_scale_mlp, reference_gate_mlp = self.norm1(
+                    reference_image_hidden_states, emb=reference_temb
+                )
             attn_output, context_attn_output, reference_attn_output = self.attn(
                 hidden_states=norm_hidden_states,
                 encoder_hidden_states=norm_encoder_hidden_states,
@@ -211,6 +224,7 @@ class TransformerBlock(nn.Module):
                 reference_image_hidden_states=reference_norm_hidden_states,
                 reference_image_rotary_emb=reference_image_rotary_emb,
                 lora_part_enable=lora_part_enable,
+                lora_scope=scope,
             )
         else:
             attn_output, context_attn_output = self.attn(
@@ -234,14 +248,15 @@ class TransformerBlock(nn.Module):
             reference_norm_hidden_states = self.norm2(reference_image_hidden_states)
             reference_norm_hidden_states = reference_norm_hidden_states * (1 + reference_scale_mlp[:, None]) + reference_shift_mlp[:, None]
 
-        with enable_lora((self.ff.net[2], ), not lora_part_enable):
+        with enable_lora((self.ff.net[2], ), target_lora_enabled):
             ff_output = self.ff(norm_hidden_states)
             ff_output = gate_mlp.unsqueeze(1) * ff_output
 
         hidden_states = hidden_states + ff_output
 
         if reference_image_hidden_states is not None:
-            reference_ff_output = self.ff(reference_norm_hidden_states)
+            with enable_lora((self.ff.net[2],), reference_lora_enabled):
+                reference_ff_output = self.ff(reference_norm_hidden_states)
             reference_ff_output = reference_gate_mlp.unsqueeze(1) * reference_ff_output
             reference_image_hidden_states = reference_image_hidden_states + reference_ff_output
 
@@ -387,7 +402,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
         guidance_embeds (`bool`, defaults to False): Whether to use guidance embeddings.
     """
 
-    _supports_gradient_checkpointing = False
+    _supports_gradient_checkpointing = True
     # Due to NotImplementedError: DDPOptimizer backend: Found a higher order op in the graph. This is not supported. Please turn off DDP optimizer using torch._dynamo.config.optimize_ddp=False. Note that this can cause performance degradation because there will be one bucket for the entire Dynamo graph. 
     # Please refer to this issue - https://github.com/pytorch/pytorch/issues/104674.
     _no_split_modules = ["TransformerBlock", "SingleTransformerBlock"]
@@ -456,6 +471,9 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
         self.embed = UVit2DConvEmbed(
             in_channels_embed, self.inner_dim, self.config.vocab_size, ln_elementwise_affine, layer_norm_eps, use_bias
         )
+        # Zero initialization makes released checkpoints bit-for-bit compatible
+        # until explicit-region SFT updates this sidecar parameter.
+        self.edit_region_embedding = nn.Parameter(torch.zeros(self.inner_dim))
         self.mlm_layer = ConvMlmLayer(
             self.inner_dim, in_channels_embed, use_bias, ln_elementwise_affine, layer_norm_eps, self.config.codebook_size
         )
@@ -658,6 +676,9 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
         reference_image_ids: torch.Tensor = None,
         reference_image_timestep: int=0,
         lora_part_enable: Optional[bool] = False,
+        lora_scope: Optional[str] = None,
+        edit_region_mask: Optional[torch.Tensor] = None,
+        edit_region_conditioning_active: bool = True,
     ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
         """
         The [`FluxTransformer2DModel`] forward method.
@@ -707,7 +728,13 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
         encoder_hidden_states = self.context_embedder(encoder_hidden_states) # 1024 -> 1024 
         encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states) # to figure out how many parameters here
 
-        hidden_states = self.embed(hidden_states) # output will be [2,768,16,16] # [2, 1024, 16, 16] 
+        hidden_states = self.embed(hidden_states) # output will be [2,768,16,16] # [2, 1024, 16, 16]
+        hidden_states = add_region_condition(
+            hidden_states,
+            self.edit_region_embedding,
+            edit_region_mask,
+            active=edit_region_conditioning_active,
+        )
         hidden_states = self.down_block(hidden_states)
 
         batch_size, channels, height, width = hidden_states.shape
@@ -781,11 +808,11 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
             if self.training and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
-                    def custom_forward(*inputs):
+                    def custom_forward(*inputs, **kwargs):
                         if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
+                            return module(*inputs, return_dict=return_dict, **kwargs)
                         else:
-                            return module(*inputs)
+                            return module(*inputs, **kwargs)
 
                     return custom_forward
 
@@ -801,6 +828,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
                         image_rotary_emb=image_rotary_emb,
                         reference_image_rotary_emb=reference_image_rotary_emb if reference_image_hidden_states is not None else None,
                         lora_part_enable=lora_part_enable,
+                        lora_scope=lora_scope,
                         **ckpt_kwargs,
                     )
                 else:
@@ -824,6 +852,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
                         image_rotary_emb=image_rotary_emb,
                         reference_image_rotary_emb=reference_image_rotary_emb if reference_image_hidden_states is not None else None,
                         lora_part_enable=lora_part_enable,
+                        lora_scope=lora_scope,
                     )
                 else:
                     encoder_hidden_states, hidden_states = block(
@@ -845,17 +874,18 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
             if self.training and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
-                    def custom_forward(*inputs):
+                    def custom_forward(*inputs, **kwargs):
                         if return_dict is not None:
-                            return module(*inputs, return_dict=return_dict)
+                            return module(*inputs, return_dict=return_dict, **kwargs)
                         else:
-                            return module(*inputs)
+                            return module(*inputs, **kwargs)
 
                     return custom_forward
 
                 ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
                 if reference_image_hidden_states is not None:
                     hidden_states, reference_image_hidden_states = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(block),
                         hidden_states=hidden_states,
                         reference_image_hidden_states=reference_image_hidden_states if reference_image_hidden_states is not None else None,
                         temb=temb,
@@ -863,6 +893,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
                         image_rotary_emb=image_rotary_emb,
                         reference_image_rotary_emb=reference_image_rotary_emb if reference_image_hidden_states is not None else None,
                         lora_part_enable=lora_part_enable,
+                        lora_scope=lora_scope,
                         **ckpt_kwargs,
                     )
                 else:
@@ -883,6 +914,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
                         image_rotary_emb=image_rotary_emb,
                         reference_image_rotary_emb=reference_image_rotary_emb if reference_image_hidden_states is not None else None,
                         lora_part_enable=lora_part_enable,
+                        lora_scope=lora_scope,
                     )
                 else:
                     hidden_states = block(

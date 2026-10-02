@@ -1,0 +1,24 @@
+model: {repo_or_root: "${EDITMGT_MODEL_ROOT}", transformer_subfolder: editmgt, text_encoder_subfolder: text_encoder, tokenizer_subfolder: tokenizer, llm_encoder_subfolder: llm_encoder, vqvae_subfolder: vqvae, scheduler_subfolder: scheduler}
+data: {name: magicbrush, manifest: "${MAGICBRUSH_ROOT}/manifest.jsonl"}
+output_dir: ${EDITMGT_OUTPUT_ROOT}/local-resume-to20
+resolution: 1024
+seed: 42
+precision: bf16
+component_dtypes: {transformer: bf16, text_encoders: bf16, vqvae: fp32}
+torch_compile: false
+gradient_checkpointing: true
+batch_per_gpu: 1
+gradient_accumulation: 1
+num_workers: 0
+max_optimizer_steps: 20
+scheduler_horizon_steps: 6000
+warmup_steps: 200
+checkpoint_steps: [20]
+geometry: {max_resample_attempts: 8, minimum_mask_retention: 0.75}
+token_mask: {mode: any_overlap, coverage_threshold: 0.5, dilation_tokens: 0, minimum_edit_tokens: 1}
+corruption: {mode: mixed, roi_probability: 0.85, full_roi_mask_probability: 0.15}
+condition_dropout: {enabled: true, probability: 0.1, scope: text_only}
+validation: {enabled: false}
+quality_gate: {enabled: true, baseline_start: 101, baseline_end: 400, window_size: 50, max_loss_ratio: 1.75, consecutive_bad_windows: 2, max_abs_logit: 100.0, max_clip_fraction: 1.0, max_update_ratio: 1.0}
+lora: {scope: both, rank: 64, alpha: 64, dropout: 0.05, target_modules: [to_q, to_k, to_v, to_out.0, ff.net.2, proj_mlp, proj_out]}
+optimizer: {name: AdamW, learning_rate: 0.00003, betas: [0.9, 0.95], weight_decay: 0.01, gradient_clip: 1.0, scheduler: constant_with_warmup}

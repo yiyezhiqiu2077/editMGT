@@ -1,0 +1,4 @@
+extends: formal.yaml
+generation_seeds: [0]
+bootstrap: {seed: 42, resamples: 1000, unit: sample_after_seed_mean}
+selection: {status: DIAGNOSTIC_ONLY, threshold_preserve: null, tau_edit: null, tau_noop: null}

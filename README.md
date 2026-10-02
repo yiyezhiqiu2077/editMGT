@@ -1,155 +1,208 @@
-<h1 align="center" style="line-height: 50px;">
-  ✨ EditMGT: Unleashing the Potential of Masked Generative Transformer in Image Editing ✨
-</h1>
+# EditMGT Explicit-Region Editing Experiments
 
-<div align="center">
-Wei Chow<sup>1,*</sup>, Linfeng Li<sup>1,*</sup>, Lingdong Kong<sup>1</sup>, Zefeng Li<sup>1</sup>, Qi Xu<sup>1</sup>, Hang Song<sup>1</sup>, Tian Ye<sup>4</sup>, Xian Wang<sup>1</sup>, Jinbin Bai<sup>3</sup>, Shilin Xu<sup>1</sup>, Xiangtai Li<sup>1</sup>, Junting Pan<sup>1</sup>, Shaoteng Liu<sup>1</sup>, Ran Zhou<sup>1</sup>, Tianshu Yang<sup>1</sup>, Songhua Liu<sup>2</sup>
+This is a research fork and experimental repository derived from the released
+[EditMGT](https://github.com/weichow23/editmgt) codebase. It studies image editing with a
+provided region / explicit mask. The first milestone is an auditable mask-aware SFT baseline;
+the resulting dense checkpoint is intended to support later dense, cache, sparse, and shortcut
+generation-acceleration studies.
 
-<sup>1</sup>ByteDance, <sup>2</sup>Shanghai Jiao Tong University, <sup>3</sup>National University of Singapore, <sup>4</sup>The Hong Kong University of Science and Technology (Guangzhou)
-  
-<small>*Equal Contribution</small>
+The repository contains experiment code and reproducibility gates, not completed formal results.
+No performance improvement is claimed here. The complete runbook is in
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
-[![arXiv](https://img.shields.io/badge/arXiv-2512.11715-b31b1b.svg)](https://arxiv.org/abs/2512.11715)
-[![Dataset](https://img.shields.io/badge/🤗%20CrispEdit2M-Dataset-yellow)](https://huggingface.co/datasets/WeiChow/CrispEdit-2M)
-[![Checkpoint](https://img.shields.io/badge/🧨%20EditMGT-CKPT-blue)](https://huggingface.co/WeiChow/EditMGT)
-[![GitHub](https://img.shields.io/badge/GitHub-Repo-181717?logo=github)](https://github.com/weichow23/editmgt/tree/main)
-[![Page](https://img.shields.io/badge/🏠%20Home-Page-b3.svg)](https://weichow23.github.io/EditMGT/)
-</div>
+## Current status
 
-## 🚀 Project Introduction
+| Item | Status |
+| --- | --- |
+| Local D200K-v2 implementation | DONE |
+| Local unit tests | 41 passed |
+| 1024 one-step backward on one A100 40GB | PASS |
+| Fixed real 200K corpus | NOT BUILT |
+| Real CrispEdit-labeling-39k audit | NOT RUN |
+| Real ScaleEdit-labeling-25k audit | NOT RUN |
+| Real Inter-Edit-Train audit | NOT RUN |
+| 8-GPU fixed-corpus smoke / resume smoke | NOT RUN |
+| LR probes and formal E1–E4 | NOT RUN |
+| Optional Stage A/B | NOT RUN |
 
-EditMGT is a novel framework that leverages Masked Generative Transformers for advanced image editing tasks. Our approach enables precise and controllable image modifications while preserving original content integrity.
+“Implementation complete” does not mean that the corpus or formal experiments are complete.
+`CORPUS_READY.json` has not been created from the real four-dataset corpus, so formal training must
+not be launched yet.
 
-## ⚡ Quick Start  
+## Project structure
 
-First, clone the repository and navigate to the project root:  
-```shell
-git clone https://github.com/weichow23/editmgt
-cd editmgt
+```text
+editMGT/
+├── configs/
+│   ├── cluster/
+│   ├── data/
+│   ├── eval/
+│   ├── train/
+│   └── translation/
+├── docs/
+├── scripts/
+│   ├── cluster/
+│   ├── data/
+│   ├── eval/
+│   ├── setup/
+│   └── train/
+├── src/
+│   └── explicit_region/
+├── tests/
+├── train/                    # retained upstream training code
+├── pyproject.toml
+└── uv.lock
 ```
 
-## 🔧 Environment Setup
+The formal explicit-region training entry point is
+[`scripts/train/train_explicit_region.py`](scripts/train/train_explicit_region.py), not the retained
+upstream `train/train.py`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Environment
+
+The locked project environment uses Python `>=3.10,<3.11`, `uv`, PyTorch 2.1.2 with the CUDA 12.1
+wheel index, Diffusers 0.32.1, Transformers 4.47.1, and PEFT 0.14.0.
 
 ```bash
-# Create and activate conda environment
-conda create --name editmgt python=3.9.2
-conda activate editmgt
+git clone git@github.com:yiyezhiqiu2077/editMGT.git
+cd editMGT
+uv sync --frozen --group dev --group translation --group metrics
 
-# Optional: Install system dependencies
-sudo apt-get install libgl1-mesa-glx libglib2.0-0 -y
-
-# Install Python dependencies
-pip3 install git+https://github.com/openai/CLIP
-pip3 install -r requirements.txt
-```
-⚠️ **Note**: If you encounter any strange environment library errors, please refer to [Issues](https://github.com/viiika/Meissonic/issues/14) to find the correct version that might fix the error.
-
-## 🎯 Training
-
-For training, you can try using `--instance_dataset HuggingFaceDataset` with the [AnyEdit](https://huggingface.co/datasets/Bin1117/AnyEdit) dataset to get the training code running. After verifying functionality, you can switch to your own dataset.
-
-### 📝 Configuration
-The `train/train_edit.yaml` file controls training behavior. Key settings include:
-
-| Parameter | Description | Default |
-|-----------------|-----------------------------------------------------------------------------|----------|
-| `mixed_precision` | Training Precision | `no` for float32; `bf16` for bfloat16 |
-| `resume_from_checkpoint` | Resume Training | `direct local path` or `latest` |
-| `wandb_id` | Weights & Biases ID | keep empty or id number |
-| `pretrained_model_name_or_path` | Base Model | `MeissonFlow/Meissonic` |
-| `output_dir` | Checkpoint Save Location | `./runs/editmgt` |
-| `train_batch_size` | Batch Size per GPU | `4` |
-| `gradient_accumulation_steps` | Steps before Weight Update | `8` |
-| `learning_rate` | Initial Learning Rate | `1e-4` |
-| `max_grad_norm` | Gradient Clipping Value | `10` |
-| `text_encoder_architecture` | Text Encoder Model | `CLIP_Gemma2` |
-| `resolution` | Image Resolution | `1024` |
-| `lr_scheduler` | Learning Rate Schedule | `constant` |
-| `max_train_steps` | Total Training Steps | `500000` |
-| `checkpointing_steps` | Save Frequency | `200` |
-| `logging_steps` | Log Metrics Frequency | `10` |
-
-To use Weights & Biases for tracking the training process, add these to your environment:
-```shell
-echo 'export WANDB_API_KEY=<YOUR WANDB API>' >> ~/.bashrc
-echo 'export WANDB_ENTITY=<YOUR WANDB ENTITY>' >> ~/.bashrc
-echo 'export hf_token=<YOUR HF TOKEN>' >> ~/.bashrc
-source ~/.bashrc
+uv run python - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.version.cuda)
+print(torch.cuda.is_available())
+PY
 ```
 
-#### 🧩 Enabling LoRA
-To use LoRA (reduces memory usage by ~70%), add the following to the `train.sh` file under `train`:
-```shell
---use_lora \
---lora_r 32 \
---lora_alpha 128
-```
-Here, `lora_r` and `lora_alpha` represent the rank and alpha parameters of LoRA, respectively.
+Models and data are local-only assets and are not downloaded silently. Full setup and storage
+guidance is in [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
-#### 🚗 Run Training
-Use the script to start training. Specify the config file and enable LoRA if needed:
-```shell
-bash train/train.sh
-```
-⚠️ **Important**: Since Meissonic has not released bf16 weights, fp16 weights may cause training instability. Therefore, we use fp32 for training (although this will be slower).
+## Models and data
 
-## 🔍 Inference
-We provide a standard example script:
+This repository does not publish model weights, raw datasets, translation weights, checkpoints,
+evaluation-model weights, derived corpora, caches, or experiment outputs. Runtime locations are
+provided with environment variables:
 
-```shell
-python3 infer.py
+```text
+EDITMGT_MODEL_ROOT
+MAGICBRUSH_ROOT
+MAGICBRUSH_DEV_ROOT
+CRISPEDIT_ROOT
+SCALEEDIT_ROOT
+INTEREDIT_ROOT
+TRANSLATOR_MODEL_ROOT
+DERIVED_ROOT
+EDITMGT_OUTPUT_ROOT
 ```
 
-### 🃏 GEditBench-EN
-We also provide evaluation scripts for GEditBench. Refer to the [Official Repo](https://github.com/stepfun-ai/Step1X-Edit/blob/main/GEdit-Bench/EVAL.md) for implementation details.
+Raw datasets are treated as immutable and read-only. Dataset and model revisions must be recorded
+with immutable identifiers before a formal build.
 
-You'll need to install additional dependencies beyond our `requirements.txt`:
-```shell
-pip3 install megfile==4.1.4
+## D200K-v2
+
+The planned fixed corpus contains exactly 200,000 rows selected without replacement from:
+
+- MagicBrush official train: all eligible rows;
+- CrispEdit-labeling-39k: capped at 39,000 rows;
+- ScaleEdit-labeling-25k: capped at 25,000 rows;
+- quality-filtered Inter-Edit: fills the remaining quota.
+
+Those are policies and caps, not observed final contributions; the real corpus has not been built.
+The frozen epoch is deterministically permuted and rank-strided. With 8 GPUs, batch/GPU 1, and
+gradient accumulation 4, global batch is 32 and one 200K epoch is 6,250 optimizer steps.
+
+Schema audit, canonicalization, translation, duplicate handling, audit, and READY attestation are
+described in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+
+## Explicit-region SFT
+
+The experiment layer adds:
+
+- shared source / target / region geometry;
+- pixel-to-token edit-region mapping;
+- ROI hard-lock corruption and loss only on the selected masked subset;
+- persistent edit-region embedding;
+- ROI-relative inference timestep;
+- target/reference LoRA scope control over a frozen backbone;
+- content-bound fingerprints and deterministic optimizer-boundary resume.
+
+## Formal experiments
+
+All long runs below are currently **NOT RUN**.
+
+| Run | Corruption / mask condition | LoRA scope |
+| --- | --- | --- |
+| E0-official | released model, upstream timestep | released weights |
+| E0-region | released model, ROI-relative timestep | released weights |
+| E1 | `full_target`, mask condition OFF | both |
+| E2 | ROI hard lock, mask condition OFF | both |
+| E3 | ROI hard lock, mask condition ON | both |
+| E4 | ROI hard lock, mask condition ON | reference only |
+
+E1–E4 use the same fixed 200K rows, permutation, budget, and primary validation protocol. The only
+intended differences are listed above.
+
+## Training
+
+Formal shell entry points default to printing commands. `--run` additionally requires the explicit
+confirmation variable documented in the runbook.
+
+```bash
+# Fixed-corpus preparation
+bash scripts/cluster/prepare_fixed_200k_v2.sh --print-command
+
+# 8-GPU uninterrupted/resume smoke
+bash scripts/cluster/run_8g_smoke.sh --print-command
+
+# 1e-5 / 3e-5 / 5e-5 probes
+bash scripts/cluster/run_lr_probes.sh --print-command
+
+# E1–E4
+bash scripts/cluster/run_e1_e4.sh --print-command
 ```
-Then use the scirpt:
 
-```shell
-python3 eval/geditbench/infer.py
+After review, the corresponding operation uses the same launcher with `--run`. See
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) before executing any of them.
+
+## Evaluation
+
+MagicBrush official DEV is the primary validation set. MagicBrush official TEST is final-test-only
+and must not be used for tuning or checkpoint selection. The formal evaluator is
+[`scripts/eval/formal_eval.py`](scripts/eval/formal_eval.py).
+
+Implemented measurements include inside/outside L1, PSNR, SSIM, feature-space masked LPIPS,
+full-image LPIPS-to-target, optional DINO-I and CLIP-I similarities to target/source, no-op raw
+diagnostics, runtime, repeated-seed sample means, standard errors, and sample-level bootstrap
+confidence intervals. DINO/CLIP evaluation requires explicit local model paths and does not download
+weights implicitly.
+
+## Tests
+
+```bash
+uv run pytest -q
+uv run python -m compileall src scripts tests
 ```
 
-Generate and organize your images in the following directory structure:
-```
-results/
-├── {method_name}/
-│   └── fullset/
-│       └── {edit_task}/
-│           └── en/  # English instructions
-│               ├── key1.png
-│               ├── key2.png
-│               └── ...
-```
+The recorded `41 passed` result is the current D200K-v2 local validation result, not a GitHub CI
+claim and not evidence that the unrun cluster experiments passed.
 
-Run the inference script:
-```shell
-PYTHON_PATH='./' python3 eval/geditbench/infer.py
-```
+## Documentation
 
-For GPT-4.1 evaluation, set up your API keys in `eval/geditbench/rate.py` at lines `L103` and `L105` for GPT4.1 access, then run:
+- [Architecture](docs/ARCHITECTURE.md)
+- [Environment and assets](docs/ENVIRONMENT.md)
+- [Complete experiment runbook](docs/EXPERIMENTS.md)
 
-```shell
-PYTHON_PATH='./' python3 eval/geditbench/rate.py --model_name editmgt --save_dir eval/geditbench/score_dir --backbone gpt4.1 --edited_images_dir eval/geditbench/results/ --instruction_language en
-```
+## Upstream, citation, and license
 
-Run the analysis script to get scores for semantics, quality, and overall performance:
-```shell
-PYTHON_PATH='./' python3 eval/geditbench/stat.py --model_name editmgt --save_path eval/geditbench/score_dir --backbone gpt4o --language en
-```
+This repository is derived from [the original EditMGT repository](https://github.com/weichow23/editmgt).
+It is an experimental fork and does not imply that its maintainer is an author of the original
+EditMGT paper.
 
-This will output scores broken down by edit category and provide aggregate metrics.
+Original paper: *EditMGT: Unleashing Potentials of Masked Generative Transformers in Image Editing*.
 
-**Note**: GEditBench scores can fluctuate significantly due to random generation results and GPT version differences. Fluctuations around our reported scores are normal. For AnyBench, EmuEdit, and MagicBrush, we recommend reducing guidance scale and steps for the first two, and using our mask strategy for the latter.
-
-## 📄 License
-This project is licensed under the `CCBY-4.0` License. See `LICENSE` for details.
-
-## 📑 Citation
-```
+```bibtex
 @article{chow2025editmgt,
   title={EditMGT: Unleashing Potentials of Masked Generative Transformers in Image Editing},
   author={Chow, Wei and Li, Linfeng and Kong, Lingdong and Li, Zefeng and Xu, Qi and Song, Hang and Ye, Tian and Wang, Xian and Bai, Jinbin and Xu, Shilin and others},
@@ -158,5 +211,4 @@ This project is licensed under the `CCBY-4.0` License. See `LICENSE` for details
 }
 ```
 
-## 🙏 Acknowledgements
-We thank all contributors and the research community for their valuable feedback and support.
+The upstream [CC-BY-4.0 license](LICENSE) is preserved unchanged.

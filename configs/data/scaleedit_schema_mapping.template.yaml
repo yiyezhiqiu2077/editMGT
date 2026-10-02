@@ -1,0 +1,13 @@
+schema_audit_status: NOT_RUN
+dataset_name: scaleedit
+dataset_revision: REPLACE_WITH_IMMUTABLE_REVISION
+format: parquet
+files_glob: "**/*.parquet"
+mask_semantics: REPLACE_AFTER_REAL_AUDIT
+fields:
+  source: {storage: embedded_parquet, column: REPLACE}
+  target: {storage: embedded_parquet, column: REPLACE}
+  region: {storage: embedded_parquet, column: REPLACE}
+  instruction: REPLACE
+  edit_type: REPLACE
+  group_id: null

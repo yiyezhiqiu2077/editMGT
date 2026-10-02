@@ -1,0 +1,6 @@
+extends: cluster_8g_e3.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/fixed200k-smoke-resume-fresh10
+max_optimizer_steps: 10
+scheduler_horizon_steps: 6250
+checkpoint_steps: [10]
+validation: {enabled: false}

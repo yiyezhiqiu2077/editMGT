@@ -1,0 +1,42 @@
+schema_version: fixed200k-v2
+train_total: 200000
+selection_seed: 42
+dataset_policy:
+  magicbrush: {use_all_eligible: true}
+  crispedit: {cap: 39000}
+  scaleedit: {cap: 25000}
+  interedit: {fill_remaining: true, only_better_data: true}
+validation:
+  primary: magicbrush_official_dev
+  periodic_probe_rows: 128
+  periodic_seed: 0
+  auxiliary_rows_per_dataset: 128
+  group_disjoint: true
+  exact_source_sha_disjoint: true
+selection:
+  without_replacement: true
+  order: sha256_seed_dataset_revision_sample_uid_v1
+  interedit_edit_type_order: [add, remove, local, texture]
+  interedit_region_buckets: [small, medium, large]
+duplicate_policy:
+  validation_wins: true
+  exact_source_sha256: true
+  dataset_priority: [magicbrush, crispedit, scaleedit, interedit]
+geometry:
+  minimum_mask_retention: 0.75
+  max_random_attempts: 8
+  deterministic_fallback: contain_center_pad_v1
+translation:
+  select_before_translate: true
+  backend: nllb
+  repo: facebook/nllb-200-distilled-1.3B
+  immutable_revision: ${TRANSLATOR_REVISION}
+  src_lang: zho_Hans
+  tgt_lang: eng_Latn
+  decoding: {do_sample: false, num_beams: 1, max_new_tokens: 128}
+  qa_flags: [empty_output, copy_output, han_remaining, length_ratio_outlier, digit_mismatch]
+sampler:
+  schema_version: fixed200k-hash-sort-v1
+  base_seed: 42
+  without_replacement: true
+  ddp_partition: permutation_rank_stride

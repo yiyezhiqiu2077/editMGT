@@ -53,6 +53,21 @@ class enable_lora:
             for active_adapter in lora_module.active_adapters:
                 lora_module.scaling[active_adapter] = self.scales[i][active_adapter]
 
+
+def resolve_lora_scope(lora_scope: Optional[str], lora_part_enable: bool) -> str:
+    """Resolve explicit routing while preserving the released boolean behavior.
+
+    The upstream training path passes ``lora_part_enable=True``.  Despite its
+    name, that disables LoRA on the generation/target calls and leaves it active
+    on the separately evaluated reference calls.  New code should pass an
+    explicit scope; the bool remains only for checkpoint/inference compatibility.
+    """
+    if lora_scope is None:
+        return "reference_only" if lora_part_enable else "both"
+    if lora_scope not in {"reference_only", "target_only", "both"}:
+        raise ValueError(f"unsupported lora_scope: {lora_scope}")
+    return lora_scope
+
 class LinearProjector(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
@@ -234,10 +249,15 @@ class ConFluxAttnProcessor2_0:
         reference_image_hidden_states: Optional[torch.Tensor] = None,
         reference_image_rotary_emb: Optional[torch.Tensor] = None,
         lora_part_enable: bool = False,
+        lora_scope: Optional[str] = None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
-        with enable_lora((attn.to_q, attn.to_k, attn.to_v), not lora_part_enable):
+        scope = resolve_lora_scope(lora_scope, lora_part_enable)
+        target_lora_enabled = scope in {"target_only", "both"}
+        reference_lora_enabled = scope in {"reference_only", "both"}
+
+        with enable_lora((attn.to_q, attn.to_k, attn.to_v), target_lora_enabled):
             query = attn.to_q(hidden_states)
             key = attn.to_k(hidden_states)
             value = attn.to_v(hidden_states)
@@ -297,9 +317,12 @@ class ConFluxAttnProcessor2_0:
             key = apply_rotary_emb(key, image_rotary_emb)
 
         if reference_image_hidden_states is not None:
-            reference_query = attn.to_q(reference_image_hidden_states)
-            reference_key = attn.to_k(reference_image_hidden_states)
-            reference_value = attn.to_v(reference_image_hidden_states)
+            with enable_lora(
+                (attn.to_q, attn.to_k, attn.to_v), reference_lora_enabled
+            ):
+                reference_query = attn.to_q(reference_image_hidden_states)
+                reference_key = attn.to_k(reference_image_hidden_states)
+                reference_value = attn.to_v(reference_image_hidden_states)
             reference_query = reference_query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
             reference_key = reference_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
             reference_value = reference_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
@@ -407,7 +430,7 @@ class ConFluxAttnProcessor2_0:
                     hidden_states[:, encoder_hidden_states.shape[1]:],
                 )
 
-            with enable_lora((attn.to_out[0],), not lora_part_enable):
+            with enable_lora((attn.to_out[0],), target_lora_enabled):
                 # linear proj
                 hidden_states = attn.to_out[0](hidden_states)
                 # dropout
@@ -417,8 +440,9 @@ class ConFluxAttnProcessor2_0:
                 encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
 
             if reference_image_hidden_states is not None:
-                reference_image_hidden_states = attn.to_out[0](reference_image_hidden_states)
-                reference_image_hidden_states = attn.to_out[1](reference_image_hidden_states)
+                with enable_lora((attn.to_out[0],), reference_lora_enabled):
+                    reference_image_hidden_states = attn.to_out[0](reference_image_hidden_states)
+                    reference_image_hidden_states = attn.to_out[1](reference_image_hidden_states)
                 return hidden_states, encoder_hidden_states, reference_image_hidden_states
             else:
                 return hidden_states, encoder_hidden_states

@@ -1,0 +1,51 @@
+[project]
+name = "editmgt-explicit-region"
+version = "0.1.0"
+description = "Auditable explicit-region SFT for EditMGT"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+  "accelerate==1.0.1",
+  "bitsandbytes>=0.43,<0.46",
+  "datasets>=2.18,<3",
+  "diffusers==0.32.1",
+  "einops>=0.7",
+  "huggingface-hub>=0.27,<0.29",
+  "lpips==0.1.4",
+  "numpy==1.26.4",
+  "opencv-python-headless>=4.8,<5",
+  "peft==0.14.0",
+  "pillow>=10,<12",
+  "pyarrow>=15,<19",
+  "pyyaml>=6,<7",
+  "safetensors>=0.4.5",
+  "scipy>=1.11,<1.14",
+  "termcolor>=2.4",
+  "torch==2.1.2",
+  "torchvision==0.16.2",
+  "tqdm>=4.66",
+  "transformers==4.47.1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+]
+metrics = [
+  "scikit-image>=0.22,<0.25",
+]
+translation = [
+  "sentencepiece>=0.2",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

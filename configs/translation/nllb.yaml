@@ -1,0 +1,6 @@
+backend: nllb
+repo: facebook/nllb-200-distilled-1.3B
+immutable_revision: ${TRANSLATOR_REVISION}
+src_lang: zho_Hans
+tgt_lang: eng_Latn
+decoding: {do_sample: false, num_beams: 1, max_new_tokens: 128}

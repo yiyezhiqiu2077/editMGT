@@ -1,0 +1,10 @@
+resolution: 1024
+provided_region_hard_lock: true
+token_mask: {mode: any_overlap, dilation_tokens: 0, minimum_edit_tokens: 1}
+steps: 4
+guidance_scale: 10.0
+reference_strength: 1.0
+inference_timestep_mode: roi_relative
+generation_seeds: [42]
+bootstrap: {seed: 42, resamples: 100, unit: sample_after_seed_mean}
+selection: {status: DIAGNOSTIC_ONLY, threshold_preserve: null, tau_edit: null, tau_noop: null}

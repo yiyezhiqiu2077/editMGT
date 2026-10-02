@@ -1,0 +1,2 @@
+extends: local_resume_fresh10.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/local-deterministic-fresh10

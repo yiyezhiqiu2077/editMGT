@@ -1,0 +1,14 @@
+schema_version: fixed200k-edit-type-v1
+datasets:
+  magicbrush:
+    unknown: other
+  interedit:
+    Add: add
+    Remove: remove
+    Local: local_attribute
+    Texture: texture
+  crispedit: {}
+  scaleedit: {}
+# CrispEdit/ScaleEdit mappings must be filled only after their real schema
+# audits identify the actual labeling taxonomy. Unknown fixture labels map to
+# other in tests, but formal corpus preparation rejects an incomplete mapping.

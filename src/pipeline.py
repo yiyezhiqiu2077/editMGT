@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import math
 import torch
 from termcolor import cprint
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
@@ -25,6 +26,10 @@ from src.local_utils import smooth_local_scores, tokens_to_attn, rescale_scores
 from src.transformer import Transformer2DModel, get_text_encoder_length
 from src.dataset_utils import tokenize_prompt, encode_prompt, process_image
 from src.v2_utils import prepare_cond_token
+from src.explicit_region.conditioning import (
+    duplicate_region_mask_for_cfg, initialize_hardlock_latents, region_scheduled_ratio,
+)
+from src.explicit_region.masks import pixel_mask_to_token_mask
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -105,7 +110,7 @@ class Pipeline(DiffusionPipeline):
         self.attention_enable_blocks = None 
         # Local attention threshold [0, 1]
         self.local_guidance=0
-        
+
         self.current_attention_list = {}
         self.selected_mask_token = {}
         self.local_scores_list = {}
@@ -116,7 +121,7 @@ class Pipeline(DiffusionPipeline):
         mask_token_id = self.scheduler.config.mask_token_id
         # Replace the mask token with 0 (pure black)
         decode_latents[decode_latents == mask_token_id] = 0
-        
+
         needs_upcasting = self.vqvae.dtype == torch.float16 and self.vqvae.config.force_upcast
         if needs_upcasting:
             self.vqvae.float()
@@ -167,7 +172,9 @@ class Pipeline(DiffusionPipeline):
         reference_image: PipelineImageInput = None,
         reference_strength: float = 1,
         lora_part_enable: Optional[bool] = False,       
-        lora_scale: Optional[float] = None,           
+        lora_scale: Optional[float] = None,
+        lora_scope: Optional[str] = None,
+        inference_timestep_mode: str = "roi_relative",
     ):
         """
         The call function to the pipeline for generation.
@@ -238,6 +245,8 @@ class Pipeline(DiffusionPipeline):
                 `tuple` is returned where the first element is a list with the generated images.
         """
 
+        if inference_timestep_mode not in {"roi_relative", "official_upstream_timestep"}:
+            raise ValueError("inference_timestep_mode must be roi_relative or official_upstream_timestep")
         if self.attention_enable_blocks is not None:
             self.transformer.register_attention_hooks(self.attention_enable_blocks)
         self.current_attention_list = {}
@@ -327,8 +336,15 @@ class Pipeline(DiffusionPipeline):
         starting_mask_ratio = 1.0
 
         if mask_image is not None:
-            mask = self.mask_processor.preprocess(
-                mask_image, height // self.vae_scale_factor, width // self.vae_scale_factor
+            pixel_mask = self.mask_processor.preprocess(
+                mask_image, height, width
+            )
+            mask = pixel_mask_to_token_mask(
+                pixel_mask,
+                (height // self.vae_scale_factor, width // self.vae_scale_factor),
+                mode="any_overlap",
+                dilation_tokens=0,
+                minimum_edit_tokens=1,
             )
 
         shape = (batch_size, height // self.vae_scale_factor, width // self.vae_scale_factor)
@@ -349,9 +365,10 @@ class Pipeline(DiffusionPipeline):
             reference_image_hidden_states = reference_image_hidden_states.reshape(-1, height // self.vae_scale_factor, width // self.vae_scale_factor) # 处理和训练保持了一致
 
             if mask_image is not None:
-                latents = reference_image_hidden_states
-                mask = mask.reshape(mask.shape[0], latents.shape[-2], latents.shape[-1]).bool().to(latents.device)
-                latents[mask] = self.scheduler.config.mask_token_id  # replace the mask region needs update
+                mask = mask.bool().to(latents.device)
+                latents = initialize_hardlock_latents(
+                    reference_image_hidden_states, mask, self.scheduler.config.mask_token_id
+                )
                 starting_mask_ratio = mask.sum() / latents.numel()
             
         if reference_strength != 1:
@@ -361,17 +378,47 @@ class Pipeline(DiffusionPipeline):
                 module.reference_strength_factor = torch.ones(1, 1) * reference_strength
 
         intermediate_latents = {}
+        self.last_inference_diagnostics = []
         
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             timesteps_iter = enumerate(self.scheduler.timesteps)
 
             for i, timestep in timesteps_iter:
+                # The transformer API accepts a normalized mask ratio and scales
+                # it to the model's [0,1000] time embedding internally.  Use the
+                # same ROI-relative cosine contract as training; never encode a
+                # small ROI as a low-noise full-image fraction.
+                scheduled_roi_ratio = region_scheduled_ratio(i, len(self.scheduler.timesteps))
+                model_timestep = (
+                    float(timestep.item())
+                    if inference_timestep_mode == "official_upstream_timestep"
+                    else scheduled_roi_ratio
+                )
+                unknown = latents.eq(self.scheduler.config.mask_token_id)
+                if mask_image is not None:
+                    roi_count = mask.sum().clamp_min(1)
+                    actual_roi = float((unknown & mask).sum().float() / roi_count)
+                else:
+                    actual_roi = float(unknown.float().mean())
+                self.last_inference_diagnostics.append({
+                    "step_index": i,
+                    "scheduler_timestep": int(timestep),
+                    "timestep_mode": inference_timestep_mode,
+                    "scheduled_roi_ratio": scheduled_roi_ratio,
+                    "actual_roi_mask_fraction": actual_roi,
+                    "actual_global_mask_fraction": float(unknown.float().mean()),
+                    "transformer_timestep": model_timestep * 1000.0,
+                })
                 if guidance_scale > 1.0:
                     model_input = torch.cat([latents] * 2)
+                    model_edit_region_mask = duplicate_region_mask_for_cfg(
+                        mask if mask_image is not None else None, guidance_enabled=True
+                    )
                     if reference_image is not None:
                         reference_input = torch.cat([reference_image_hidden_states, reference_image_hidden_states], dim=0)
                 else:
                     model_input = latents
+                    model_edit_region_mask = mask if mask_image is not None else None
                     if reference_image is not None:
                         reference_input = reference_image_hidden_states
                     
@@ -394,11 +441,17 @@ class Pipeline(DiffusionPipeline):
                         encoder_hidden_states=encoder_hidden_states,
                         img_ids = img_ids,
                         txt_ids = txt_ids,
-                        timestep = torch.tensor([timestep]*model_input.shape[0], device=model_input.device, dtype=torch.long),
+                        timestep = torch.full(
+                            (model_input.shape[0],), model_timestep,
+                            device=model_input.device, dtype=torch.float32,
+                        ),
                         reference_image_hidden_states=reference_input.to(dtype=model_input.dtype, device=model_input.device),
                         reference_image_ids=reference_image_ids,
-                        joint_attention_kwargs={"scale": lora_scale},
+                        joint_attention_kwargs={"scale": 1.0 if lora_scale is None else lora_scale},
                         lora_part_enable=lora_part_enable,
+                        lora_scope=lora_scope,
+                        edit_region_mask=model_edit_region_mask,
+                        edit_region_conditioning_active=model_edit_region_mask is not None,
                     )
                 else:
                     # text to image
@@ -409,7 +462,12 @@ class Pipeline(DiffusionPipeline):
                         encoder_hidden_states=encoder_hidden_states,
                         img_ids = img_ids,
                         txt_ids = txt_ids,
-                        timestep = torch.tensor([timestep]*model_input.shape[0], device=model_input.device, dtype=torch.long),
+                        timestep = torch.full(
+                            (model_input.shape[0],), model_timestep,
+                            device=model_input.device, dtype=torch.float32,
+                        ),
+                        edit_region_mask=model_edit_region_mask,
+                        edit_region_conditioning_active=model_edit_region_mask is not None,
                     )
 
                 if guidance_scale > 1.0:
@@ -471,4 +529,3 @@ class Pipeline(DiffusionPipeline):
             if not return_dict:
                 return (output,)
             return ImagePipelineOutput(output)
-        

@@ -1,0 +1,6 @@
+extends: cluster_8g_e3.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/lr-probe-5e-5
+max_optimizer_steps: 1500
+checkpoint_steps: [500, 1000, 1500]
+optimizer: {learning_rate: 0.00005}
+validation: {enabled: false}

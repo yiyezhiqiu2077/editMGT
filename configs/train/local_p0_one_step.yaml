@@ -1,0 +1,2 @@
+extends: local_one_step.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/p0-fp32vq-one-step

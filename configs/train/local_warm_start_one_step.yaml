@@ -1,0 +1,3 @@
+extends: local_one_step.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/local-warm-start-one-step
+checkpoint_steps: []

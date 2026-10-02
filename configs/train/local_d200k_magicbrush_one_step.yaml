@@ -1,0 +1,4 @@
+extends: local_one_step.yaml
+output_dir: ${EDITMGT_OUTPUT_ROOT}/d200k-v2-magicbrush-one-step-final
+checkpoint_steps: [1]
+validation: {enabled: false}
