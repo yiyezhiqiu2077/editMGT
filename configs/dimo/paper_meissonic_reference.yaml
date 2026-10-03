@@ -1,0 +1,18 @@
+# Transcription of the relevant defaults in upstream DiMO commit
+# 24613741ec9ca730273a6ebc822327878d5a086b. This file is documentation only;
+# the EditMGT trainer does not load or import upstream code from it.
+status: REFERENCE_ONLY_NOT_FORMAL
+source: configs/DIMO_Meissonic.yaml
+fixed_ratio: 0.5
+noise_emb_perturb: fix_0.3
+distil_loss_type: Jeffreys_0.0
+ratio_mode: cosine
+ratio_mode_fake: cosine
+top_k: 0
+top_p: 0.0
+generator_temperature: 1.0
+teacher_temperature: 1.0
+fake_temperature: 1.0
+alpha_fake: 0.0
+ema_decay: 0.9999
+max_train_steps_upstream: 20000

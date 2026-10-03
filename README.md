@@ -151,6 +151,8 @@ MagicBrush official DEV 是 primary validation set；MagicBrush official TEST �
 
 当前实现的指标包括 inside/outside L1、PSNR、SSIM、feature-space masked LPIPS、full-image LPIPS-to-target、可选的 DINO-I/CLIP-I target/source similarity、no-op 原始诊断、运行时间、多 seed sample mean、standard error 和 sample-level bootstrap confidence interval。DINO/CLIP 评估必须显式配置本地模型路径，不会隐式下载权重。
 
+Future: Region-DiMO one-step distillation — **CODE PREP ONLY**。设计与门禁见 [docs/DIMO_PORTING.md](docs/DIMO_PORTING.md)。
+
 ## 测试
 
 ```bash

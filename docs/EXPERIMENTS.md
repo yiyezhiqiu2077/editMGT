@@ -568,3 +568,12 @@ unset CONFIRM_FORMAL_RUN
 ```
 
 只有在使用已提交的 DEV-only 规则选出唯一 candidate 后，才能进入 final TEST。
+
+## 23. Future stage: Region-DiMO one-step distillation
+
+本阶段当前仅完成代码准备，不是正式实验。只有
+`FIXED_200K_FORMAL_READY=true`、E1–E4 全部完成、且按预注册 DEV-only
+selector 冻结 selected dense teacher 后，才允许设置
+`DIMO_TEACHER_CHECKPOINT` 并进入 formal Region-DiMO。当前
+`SELECTED_DIMO_TEACHER=NONE`、`DIMO_EDIT_FORMAL_READY=false`。完整设计、
+upstream code reference 和后续门禁见 [DIMO_PORTING.md](DIMO_PORTING.md)。

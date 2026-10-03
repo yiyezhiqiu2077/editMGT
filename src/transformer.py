@@ -28,6 +28,7 @@ from peft import LoraConfig
 from src.v2_utils import MLPProjector, LinearProjector, FusedMLPProjector, PerceiverResampler, ConFluxAttnProcessor2_0, enable_lora, resolve_lora_scope
 from src.dataset_utils import get_encode_hidden_state_len
 from src.explicit_region.conditioning import add_region_condition
+from src.dimo.forward_process import apply_target_embedding_perturbation
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -679,6 +680,9 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
         lora_scope: Optional[str] = None,
         edit_region_mask: Optional[torch.Tensor] = None,
         edit_region_conditioning_active: bool = True,
+        edit_region_embedding_override: Optional[torch.Tensor] = None,
+        target_embedding_noise: Optional[torch.Tensor] = None,
+        target_embedding_noise_sigma: float = 0.0,
     ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
         """
         The [`FluxTransformer2DModel`] forward method.
@@ -729,9 +733,20 @@ class Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginal
         encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states) # to figure out how many parameters here
 
         hidden_states = self.embed(hidden_states) # output will be [2,768,16,16] # [2, 1024, 16, 16]
+        hidden_states = apply_target_embedding_perturbation(
+            hidden_states,
+            target_embedding_noise,
+            edit_region_mask,
+            target_embedding_noise_sigma,
+        )
+        region_embedding = (
+            self.edit_region_embedding
+            if edit_region_embedding_override is None
+            else edit_region_embedding_override
+        )
         hidden_states = add_region_condition(
             hidden_states,
-            self.edit_region_embedding,
+            region_embedding,
             edit_region_mask,
             active=edit_region_conditioning_active,
         )

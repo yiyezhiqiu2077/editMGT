@@ -1,0 +1,20 @@
+extends: base.yaml
+
+# Plumbing only: temporary compatible teacher quality is not validated.
+formal_ready: false
+max_optimizer_steps: 2
+validation: false
+batch_per_gpu: 1
+num_workers: 0
+data:
+  name: magicbrush
+  manifest: ${DIMO_SMOKE_MANIFEST}
+output_dir: ${DIMO_PREP_OUTPUT}
+geometry: {max_resample_attempts: 8, minimum_mask_retention: 0.75}
+token_mask: {mode: any_overlap, coverage_threshold: 0.5, dilation_tokens: 0, minimum_edit_tokens: 1}
+checkpoint:
+  purpose: smoke_output_only
+  save_at_complete_steps: [1, 2]
+metadata:
+  PREP_ONLY_TEACHER: true
+  TEACHER_QUALITY_NOT_VALIDATED: true

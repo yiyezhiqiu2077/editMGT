@@ -1,0 +1,71 @@
+# Region-DiMO reference defaults. These values are inspired by the reviewed
+# Meissonic code; none is a selected formal EditMGT hyperparameter.
+teacher_checkpoint: ${DIMO_TEACHER_CHECKPOINT}
+formal_ready: false
+upstream_reference_commit: 24613741ec9ca730273a6ebc822327878d5a086b
+
+model:
+  repo_or_root: ${EDITMGT_MODEL_ROOT}
+  resolution: 1024
+
+resolution: 1024
+precision: bf16
+gradient_checkpointing: true
+
+model_roles:
+  backend: shared_base_adapters
+  student_trainable_scope: lora_and_region
+  auxiliary_trainable_scope: lora_and_region
+
+initialization:
+  mask_ratio: 0.5  # REFERENCE DEFAULT, NOT FORMAL
+  random_tokens_inside_roi: true
+
+embedding_perturbation:
+  enabled: true
+  sigma: 0.3  # REFERENCE DEFAULT, NOT FORMAL
+  scope: target_roi_only
+
+distillation:
+  mode: FKL  # REFERENCE DEFAULT, NOT FORMAL
+  jeffreys_beta: 0.5
+  teacher_temperature: 1.0
+  auxiliary_temperature: 1.0
+  teacher_cfg: 1.0
+  auxiliary_cfg: 1.0
+
+pseudo_forward:
+  teacher_ratio_mode: cosine  # REFERENCE DEFAULT, NOT FORMAL
+  auxiliary_ratio_mode: cosine
+  ratio_min: 0.02
+  ratio_max: 0.98
+
+auxiliary:
+  updates_per_student: 1
+  batch_policy: same_batch
+  soft_target_weight: 0.0
+
+sampling:
+  temperature: 1.0
+  top_k: 0
+  top_p: 0.0
+
+ema:
+  enabled: true
+  decay: 0.9999  # REFERENCE DEFAULT, NOT FORMAL
+
+gt_anchor:
+  weight: 0.0
+
+seed: 42
+max_optimizer_steps: 0  # formal horizon is deliberately undefined before teacher selection
+validation: false
+optimizer:
+  name: AdamW
+  student_learning_rate: 0.000001
+  auxiliary_learning_rate: 0.000001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  scheduler: constant_with_warmup
+  warmup_steps: 0
+  horizon_steps: 20000  # REFERENCE scheduler shape only; prep is hard-limited to 2 steps
