@@ -1,35 +1,27 @@
-# EditMGT Explicit-Region Editing Experiments
+# EditMGT 显式区域编辑实验
 
-This is a research fork and experimental repository derived from the released
-[EditMGT](https://github.com/weichow23/editmgt) codebase. It studies image editing with a
-provided region / explicit mask. The first milestone is an auditable mask-aware SFT baseline;
-the resulting dense checkpoint is intended to support later dense, cache, sparse, and shortcut
-generation-acceleration studies.
+本仓库是基于已发布 [EditMGT](https://github.com/weichow23/editmgt) 代码建立的研究分支，主要研究带给定区域（provided region）或显式掩码（explicit mask）的图像编辑。当前第一个里程碑是建立一套可审计的 mask-aware SFT 基线；后续计划以得到的 dense checkpoint 为基础，继续研究 dense、cache、sparse 和 shortcut 等生成加速方向。
 
-The repository contains experiment code and reproducibility gates, not completed formal results.
-No performance improvement is claimed here. The complete runbook is in
-[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+仓库目前提供的是实验代码和可复现门禁，并不代表正式实验已经完成，也不宣称获得了性能提升。完整实验流程见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
-## Current status
+## 当前状态
 
-| Item | Status |
+| 项目 | 状态 |
 | --- | --- |
-| Local D200K-v2 implementation | DONE |
-| Local unit tests | 41 passed |
-| 1024 one-step backward on one A100 40GB | PASS |
-| Fixed real 200K corpus | NOT BUILT |
-| Real CrispEdit-labeling-39k audit | NOT RUN |
-| Real ScaleEdit-labeling-25k audit | NOT RUN |
-| Real Inter-Edit-Train audit | NOT RUN |
-| 8-GPU fixed-corpus smoke / resume smoke | NOT RUN |
-| LR probes and formal E1–E4 | NOT RUN |
-| Optional Stage A/B | NOT RUN |
+| 本地 D200K-v2 实现 | 已完成 |
+| 本地单元测试 | 41 passed |
+| 单张 A100 40GB 上的 1024 一步反传 | 通过 |
+| 真实固定 200K 语料 | 尚未构建 |
+| 真实 CrispEdit-labeling-39k 审计 | 未运行（NOT RUN） |
+| 真实 ScaleEdit-labeling-25k 审计 | 未运行（NOT RUN） |
+| 真实 Inter-Edit-Train 审计 | 未运行（NOT RUN） |
+| 8-GPU 固定语料 smoke / resume smoke | 未运行（NOT RUN） |
+| LR probes 与正式 E1–E4 | 未运行（NOT RUN） |
+| 可选 Stage A/B | 未运行（NOT RUN） |
 
-“Implementation complete” does not mean that the corpus or formal experiments are complete.
-`CORPUS_READY.json` has not been created from the real four-dataset corpus, so formal training must
-not be launched yet.
+“代码实现完成”不等于“语料或正式实验完成”。当前尚未从真实四数据集生成 `CORPUS_READY.json`，因此不得启动正式训练。
 
-## Project structure
+## 项目结构
 
 ```text
 editMGT/
@@ -49,19 +41,16 @@ editMGT/
 ├── src/
 │   └── explicit_region/
 ├── tests/
-├── train/                    # retained upstream training code
+├── train/                    # 保留的上游训练代码
 ├── pyproject.toml
 └── uv.lock
 ```
 
-The formal explicit-region training entry point is
-[`scripts/train/train_explicit_region.py`](scripts/train/train_explicit_region.py), not the retained
-upstream `train/train.py`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+正式 explicit-region 训练入口是 [`scripts/train/train_explicit_region.py`](scripts/train/train_explicit_region.py)，不是保留的上游 `train/train.py`。代码组织详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-## Environment
+## 环境安装
 
-The locked project environment uses Python `>=3.10,<3.11`, `uv`, PyTorch 2.1.2 with the CUDA 12.1
-wheel index, Diffusers 0.32.1, Transformers 4.47.1, and PEFT 0.14.0.
+锁定环境使用 Python `>=3.10,<3.11`、`uv`、PyTorch 2.1.2（CUDA 12.1 wheel）、Diffusers 0.32.1、Transformers 4.47.1 和 PEFT 0.14.0。
 
 ```bash
 git clone git@github.com:yiyezhiqiu2077/editMGT.git
@@ -76,14 +65,11 @@ print(torch.cuda.is_available())
 PY
 ```
 
-Models and data are local-only assets and are not downloaded silently. Full setup and storage
-guidance is in [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
+模型和数据均使用本地资产，正式代码不会静默下载它们。完整的软件、存储和资产配置见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 
-## Models and data
+## 模型与数据
 
-This repository does not publish model weights, raw datasets, translation weights, checkpoints,
-evaluation-model weights, derived corpora, caches, or experiment outputs. Runtime locations are
-provided with environment variables:
+本仓库不提交模型权重、原始数据集、翻译模型权重、checkpoint、评估模型权重、衍生语料、缓存或实验输出。运行时通过以下环境变量提供路径：
 
 ```text
 EDITMGT_MODEL_ROOT
@@ -97,60 +83,54 @@ DERIVED_ROOT
 EDITMGT_OUTPUT_ROOT
 ```
 
-Raw datasets are treated as immutable and read-only. Dataset and model revisions must be recorded
-with immutable identifiers before a formal build.
+所有原始数据集都应视为不可变只读资产。正式构建前，必须用不可变标识记录数据集和模型 revision。
 
 ## D200K-v2
 
-The planned fixed corpus contains exactly 200,000 rows selected without replacement from:
+计划中的固定语料恰好包含 200,000 条记录，来源及选择策略为：
 
-- MagicBrush official train: all eligible rows;
-- CrispEdit-labeling-39k: capped at 39,000 rows;
-- ScaleEdit-labeling-25k: capped at 25,000 rows;
-- quality-filtered Inter-Edit: fills the remaining quota.
+- MagicBrush official train：使用全部合格记录；
+- CrispEdit-labeling-39k：最多 39,000 条；
+- ScaleEdit-labeling-25k：最多 25,000 条；
+- 经过质量筛选的 Inter-Edit：补齐剩余额度。
 
-Those are policies and caps, not observed final contributions; the real corpus has not been built.
-The frozen epoch is deterministically permuted and rank-strided. With 8 GPUs, batch/GPU 1, and
-gradient accumulation 4, global batch is 32 and one 200K epoch is 6,250 optimizer steps.
+以上是策略和上限，不是已经观测到的最终数据集占比；真实语料尚未构建。冻结语料采用确定性的无放回 epoch permutation 和 rank-stride 切分。使用 8 GPU、每卡 batch 1、梯度累积 4 时，global batch 为 32，一个 200K epoch 恰好包含 6,250 个 optimizer steps。
 
-Schema audit, canonicalization, translation, duplicate handling, audit, and READY attestation are
-described in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+schema audit、canonicalization、翻译、去重、数据审计和 READY attestation 的完整说明见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 ## Explicit-region SFT
 
-The experiment layer adds:
+本实验层增加了以下能力：
 
-- shared source / target / region geometry;
-- pixel-to-token edit-region mapping;
-- ROI hard-lock corruption and loss only on the selected masked subset;
-- persistent edit-region embedding;
-- ROI-relative inference timestep;
-- target/reference LoRA scope control over a frozen backbone;
-- content-bound fingerprints and deterministic optimizer-boundary resume.
+- source、target、region 共用的配对几何变换；
+- pixel region 到 VQ token region 的映射；
+- ROI hard-lock corruption，并只在选中的 masked subset 上计算 loss；
+- 持续生效的 edit-region embedding；
+- ROI-relative inference timestep；
+- 冻结 backbone 上的 target/reference LoRA scope 控制；
+- 内容绑定的 fingerprint，以及 optimizer boundary 上的确定性 resume。
 
-## Formal experiments
+## 正式实验
 
-All long runs below are currently **NOT RUN**.
+以下所有 long run 当前均为**未运行（NOT RUN）**。
 
-| Run | Corruption / mask condition | LoRA scope |
+| 实验 | Corruption / mask condition | LoRA scope |
 | --- | --- | --- |
-| E0-official | released model, upstream timestep | released weights |
-| E0-region | released model, ROI-relative timestep | released weights |
-| E1 | `full_target`, mask condition OFF | both |
-| E2 | ROI hard lock, mask condition OFF | both |
-| E3 | ROI hard lock, mask condition ON | both |
-| E4 | ROI hard lock, mask condition ON | reference only |
+| E0-official | released model，upstream timestep | released weights |
+| E0-region | released model，ROI-relative timestep | released weights |
+| E1 | `full_target`，mask condition OFF | both |
+| E2 | ROI hard lock，mask condition OFF | both |
+| E3 | ROI hard lock，mask condition ON | both |
+| E4 | ROI hard lock，mask condition ON | reference only |
 
-E1–E4 use the same fixed 200K rows, permutation, budget, and primary validation protocol. The only
-intended differences are listed above.
+E1–E4 使用相同的固定 200K 记录、permutation、训练预算和 primary validation protocol，预期差异仅限表中项目。
 
-## Training
+## 训练入口
 
-Formal shell entry points default to printing commands. `--run` additionally requires the explicit
-confirmation variable documented in the runbook.
+正式 shell 入口默认只打印命令。真正执行 `--run` 时，还必须设置实验文档中规定的显式确认变量。
 
 ```bash
-# Fixed-corpus preparation
+# 构建固定语料
 bash scripts/cluster/prepare_fixed_200k_v2.sh --print-command
 
 # 8-GPU uninterrupted/resume smoke
@@ -163,44 +143,34 @@ bash scripts/cluster/run_lr_probes.sh --print-command
 bash scripts/cluster/run_e1_e4.sh --print-command
 ```
 
-After review, the corresponding operation uses the same launcher with `--run`. See
-[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) before executing any of them.
+审核打印出的命令并满足所有门禁后，使用同一个 launcher 的 `--run` 模式执行。运行前必须阅读 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
-## Evaluation
+## 评估
 
-MagicBrush official DEV is the primary validation set. MagicBrush official TEST is final-test-only
-and must not be used for tuning or checkpoint selection. The formal evaluator is
-[`scripts/eval/formal_eval.py`](scripts/eval/formal_eval.py).
+MagicBrush official DEV 是 primary validation set；MagicBrush official TEST 只能用于最终测试，不得参与调参或 checkpoint selection。正式 evaluator 位于 [`scripts/eval/formal_eval.py`](scripts/eval/formal_eval.py)。
 
-Implemented measurements include inside/outside L1, PSNR, SSIM, feature-space masked LPIPS,
-full-image LPIPS-to-target, optional DINO-I and CLIP-I similarities to target/source, no-op raw
-diagnostics, runtime, repeated-seed sample means, standard errors, and sample-level bootstrap
-confidence intervals. DINO/CLIP evaluation requires explicit local model paths and does not download
-weights implicitly.
+当前实现的指标包括 inside/outside L1、PSNR、SSIM、feature-space masked LPIPS、full-image LPIPS-to-target、可选的 DINO-I/CLIP-I target/source similarity、no-op 原始诊断、运行时间、多 seed sample mean、standard error 和 sample-level bootstrap confidence interval。DINO/CLIP 评估必须显式配置本地模型路径，不会隐式下载权重。
 
-## Tests
+## 测试
 
 ```bash
 uv run pytest -q
 uv run python -m compileall src scripts tests
 ```
 
-The recorded `41 passed` result is the current D200K-v2 local validation result, not a GitHub CI
-claim and not evidence that the unrun cluster experiments passed.
+记录中的 `41 passed` 是当前 D200K-v2 本地验证结果，不是 GitHub CI 声明，也不能证明尚未运行的集群实验已经通过。
 
-## Documentation
+## 文档
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Environment and assets](docs/ENVIRONMENT.md)
-- [Complete experiment runbook](docs/EXPERIMENTS.md)
+- [代码架构](docs/ARCHITECTURE.md)
+- [环境与资产](docs/ENVIRONMENT.md)
+- [完整实验流程](docs/EXPERIMENTS.md)
 
-## Upstream, citation, and license
+## 上游项目、引用与许可证
 
-This repository is derived from [the original EditMGT repository](https://github.com/weichow23/editmgt).
-It is an experimental fork and does not imply that its maintainer is an author of the original
-EditMGT paper.
+本仓库衍生自[官方 EditMGT 仓库](https://github.com/weichow23/editmgt)。这是一个实验研究分支，不代表本仓库维护者是原始 EditMGT 论文作者。
 
-Original paper: *EditMGT: Unleashing Potentials of Masked Generative Transformers in Image Editing*.
+原始论文：*EditMGT: Unleashing Potentials of Masked Generative Transformers in Image Editing*。
 
 ```bibtex
 @article{chow2025editmgt,
@@ -211,4 +181,4 @@ Original paper: *EditMGT: Unleashing Potentials of Masked Generative Transformer
 }
 ```
 
-The upstream [CC-BY-4.0 license](LICENSE) is preserved unchanged.
+上游 [CC-BY-4.0 许可证](LICENSE)保持不变。
