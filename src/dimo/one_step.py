@@ -20,6 +20,7 @@ class OneStepTokenOutput:
     metadata: dict[str, object]
 
 
+@torch.inference_mode()
 def one_step_edit_tokens(
     roles,
     *,
@@ -65,6 +66,7 @@ def one_step_edit_tokens(
         initial.initial_roi_mask_ratio.to(source_tokens.device),
         cfg_scale,
         model_kwargs=model_kwargs,
+        training=False,
     )
     output = sample_student_tokens(
         logits,
@@ -87,6 +89,8 @@ def one_step_edit_tokens(
             "temperature": float(temperature),
             "latency": time.perf_counter() - started,
             "number_of_transformer_forwards": 1,
+            "cfg_scale": float(cfg_scale),
+            "effective_cfg_batch_multiplier": 1 if cfg_scale == 1 else 2,
             "outside_mismatch_count": 0,
         },
     )

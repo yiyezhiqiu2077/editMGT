@@ -12,7 +12,7 @@ import torch
 from .rng import stream_identity
 
 
-SCHEMA_VERSION = "dimo-editing-checkpoint-v1"
+SCHEMA_VERSION = "dimo-editing-checkpoint-v1.1"
 
 
 def config_hash(config: dict[str, Any]) -> str:
@@ -34,7 +34,8 @@ def save_dimo_checkpoint(
     epoch: int,
     samples_consumed: int,
     config_sha256: str,
-    teacher_checkpoint_hash: str,
+    teacher_bundle_fingerprint: dict[str, Any],
+    inference_fingerprint: dict[str, Any],
     upstream_commit: str,
     step_phase: str = "complete",
 ) -> None:
@@ -60,7 +61,9 @@ def save_dimo_checkpoint(
         "torch_rng_state": torch.get_rng_state(),
         "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None,
         "config_hash": config_sha256,
-        "teacher_checkpoint_hash": teacher_checkpoint_hash,
+        "teacher_bundle_fingerprint": teacher_bundle_fingerprint,
+        "teacher_bundle_sha256": teacher_bundle_fingerprint["bundle_sha256"],
+        "inference_fingerprint": inference_fingerprint,
         "dimo_upstream_reference_commit": upstream_commit,
     }
     temporary = output / "training_state.pt.tmp"
@@ -78,7 +81,8 @@ def load_dimo_checkpoint(
     auxiliary_scheduler,
     student_ema,
     expected_config_hash: str,
-    expected_teacher_hash: str,
+    expected_teacher_bundle_fingerprint: dict[str, Any],
+    expected_inference_fingerprint: dict[str, Any],
     expected_upstream_commit: str,
 ) -> dict[str, Any]:
     state = torch.load(Path(input_dir) / "training_state.pt", map_location="cpu")
@@ -86,7 +90,9 @@ def load_dimo_checkpoint(
         raise RuntimeError("invalid or partial DiMO checkpoint")
     checks = {
         "config_hash": expected_config_hash,
-        "teacher_checkpoint_hash": expected_teacher_hash,
+        "teacher_bundle_fingerprint": expected_teacher_bundle_fingerprint,
+        "teacher_bundle_sha256": expected_teacher_bundle_fingerprint["bundle_sha256"],
+        "inference_fingerprint": expected_inference_fingerprint,
         "dimo_upstream_reference_commit": expected_upstream_commit,
         "rng_stream_identity": stream_identity(),
     }
@@ -104,3 +110,25 @@ def load_dimo_checkpoint(
     if torch.cuda.is_available() and state["cuda_rng_state_all"] is not None:
         torch.cuda.set_rng_state_all(state["cuda_rng_state_all"])
     return state
+
+
+def validate_inference_checkpoint(
+    state: dict[str, Any],
+    *,
+    expected_teacher_bundle_fingerprint: dict[str, Any],
+    expected_inference_fingerprint: dict[str, Any],
+    expected_upstream_commit: str,
+) -> None:
+    checks = {
+        "schema": SCHEMA_VERSION,
+        "step_phase": "complete",
+        "teacher_bundle_fingerprint": expected_teacher_bundle_fingerprint,
+        "teacher_bundle_sha256": expected_teacher_bundle_fingerprint["bundle_sha256"],
+        "inference_fingerprint": expected_inference_fingerprint,
+        "dimo_upstream_reference_commit": expected_upstream_commit,
+    }
+    errors = [key for key, expected in checks.items() if state.get(key) != expected]
+    if not isinstance(state.get("config_hash"), str) or not state.get("config_hash"):
+        errors.append("config_hash")
+    if errors:
+        raise RuntimeError("DIMO_INFERENCE_CHECKPOINT_MISMATCH: " + ", ".join(errors))

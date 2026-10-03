@@ -98,14 +98,17 @@ class DiMOModelRoles(nn.Module):
                 parameter.requires_grad_(enabled)
 
     @contextmanager
-    def _activate(self, role: str):
+    def _activate(self, role: str, training: bool | None = None):
         if role not in ROLES:
             raise ValueError(f"unknown model role: {role}")
         previous = getattr(self.base_model, "active_adapter", None)
         was_training = self.base_model.training
         self.base_model.set_adapter(self.adapter_names[role])
         self._set_active_trainability(role)
-        self.base_model.train(role != "teacher")
+        effective_training = role != "teacher" if training is None else bool(training)
+        if role == "teacher":
+            effective_training = False
+        self.base_model.train(effective_training)
         try:
             yield
         finally:
@@ -121,10 +124,10 @@ class DiMOModelRoles(nn.Module):
                 if previous_role is not None:
                     self._set_active_trainability(previous_role)
 
-    def _forward(self, role: str, **kwargs):
+    def _forward(self, role: str, *, training: bool | None = None, **kwargs):
         if "edit_region_embedding_override" in kwargs:
             raise ValueError("role manager owns edit_region_embedding_override")
-        with self._activate(role):
+        with self._activate(role, training=training):
             return self.base_model(
                 **kwargs,
                 edit_region_embedding_override=self.region_embeddings[role],
@@ -139,22 +142,22 @@ class DiMOModelRoles(nn.Module):
         self.base_model.train(role != "teacher")
 
     @torch.no_grad()
-    def forward_teacher(self, **kwargs):
-        return self._forward("teacher", **kwargs)
+    def forward_teacher(self, *, training: bool | None = None, **kwargs):
+        return self._forward("teacher", training=False, **kwargs)
 
-    def forward_student(self, **kwargs):
-        return self._forward("student", **kwargs)
+    def forward_student(self, *, training: bool | None = None, **kwargs):
+        return self._forward("student", training=training, **kwargs)
 
-    def forward_aux(self, **kwargs):
-        return self._forward("auxiliary", **kwargs)
+    def forward_aux(self, *, training: bool | None = None, **kwargs):
+        return self._forward("auxiliary", training=training, **kwargs)
 
-    def forward_role(self, role: str, **kwargs):
+    def forward_role(self, role: str, *, training: bool | None = None, **kwargs):
         if role == "teacher":
-            return self.forward_teacher(**kwargs)
+            return self.forward_teacher(training=False, **kwargs)
         if role == "student":
-            return self.forward_student(**kwargs)
+            return self.forward_student(training=training, **kwargs)
         if role == "auxiliary":
-            return self.forward_aux(**kwargs)
+            return self.forward_aux(training=training, **kwargs)
         raise ValueError(f"unknown model role: {role}")
 
     def role_named_parameters(self, role: str) -> list[tuple[str, nn.Parameter]]:

@@ -27,6 +27,8 @@ def test_exactly_one_student_forward_and_final_outside_lock():
     )
     assert roles.calls == 1
     assert output.metadata["number_of_transformer_forwards"] == 1
+    assert output.metadata["cfg_scale"] == 1
+    assert output.metadata["effective_cfg_batch_multiplier"] == 1
     assert torch.equal(output.tokens[~region], source[~region])
 
 
@@ -46,3 +48,5 @@ def test_cfg_is_batched_into_one_student_forward():
     )
     assert roles.calls == 1
     assert output.metadata["number_of_transformer_forwards"] == 1
+    assert output.metadata["cfg_scale"] == 4
+    assert output.metadata["effective_cfg_batch_multiplier"] == 2

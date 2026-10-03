@@ -68,3 +68,58 @@ No formal or long DiMO training was started.
 - `python -m compileall src scripts tests`: PASS
 - All repository shell scripts under `scripts/`: `bash -n` PASS
 - `git diff --check`: PASS
+
+## PREP-v1.1 validation
+
+This section supplements rather than replaces the PREP-v1 results above.
+Status remains `PREP_ONLY_TEACHER=true`, `TEACHER_QUALITY_NOT_VALIDATED=true`,
+and `DIMO_EDIT_FORMAL_READY=false`.
+
+### Correctness and numerics
+
+- Inference student eval mode and `torch.inference_mode()`: PASS
+- BF16 divergence input versus its FP32-cast reference: maximum absolute
+  difference `0.0`; returned field is detached FP32
+- FP32 surrogate retains vocabulary SUM and manual
+  `g / masked_count / batch_size` gradient: PASS
+- Gradient-checkpoint OFF versus ON: student loss maximum difference `0.0`;
+  student adapter/region-gradient maximum absolute difference `0.0`
+- Teacher bundle attestation and resume equality gate: PASS
+- Raw student and strict FP32-shadow EMA loading: PASS
+- Teacher-inherit / student-zero / auxiliary-zero LoRA dropout policy: PASS
+- Fail-closed inference checkpoint compatibility gate: PASS
+
+The real-model non-training `epsilon=1e-3` auxiliary-only diagnostic perturbed
+420 LoRA tensors and then restored them. It recorded
+`||p_teacher-p_aux||=1.6169142723083496`,
+`||g_dimo||=1.0216221809387207`, student gradient norm
+`0.0031216828887180186`, and zero teacher/auxiliary gradients during student
+backward. The artifact is
+`dimo-prep-v11-smoke-r2/dimo_nonzero_signal_test.json`; it is diagnostic only.
+
+### Real 1024 regression
+
+- GPU / resolution / batch: NVIDIA A100-PCIE-40GB / 1024 / 1
+- Existing explicit-region SFT one-step: PASS; finite loss/logits/parameters
+- DiMO two-complete-step prep smoke: PASS
+- Step-2 student loss / auxiliary loss:
+  `6.466890454248642e-07` / `9.375`
+- Outside mismatch / NaN-or-Inf count: `0` / `0`
+- Peak allocated / reserved:
+  `11,923,454,976` / `13,035,896,832` bytes
+- One-step raw-student inference: PASS
+- One-step EMA inference: PASS
+- Both inference paths: one transformer invocation, CFG multiplier `1`, outside
+  mismatch `0`, NaN-or-Inf count `0`
+- Repeated raw-student output PNG SHA-256:
+  `0318dad88c8ac2c77c42678833c1c91d88a6a2a3b2453f4413cc38f37ce77329`
+  for both runs
+
+### PREP-v1.1 regression checks
+
+- Full pytest suite: `97 passed`
+- `python -m compileall src scripts tests`: PASS
+- All repository shell scripts under `scripts/`: `bash -n` PASS
+- `git diff --check`: PASS
+
+No formal teacher was selected and no formal or long DiMO training was started.

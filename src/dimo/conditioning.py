@@ -33,6 +33,7 @@ def predict_role_logits(
     cfg_scale: float,
     *,
     model_kwargs: Mapping[str, object] | None = None,
+    training: bool | None = None,
 ) -> torch.Tensor:
     """Predict with CFG while keeping source, target, and region identical."""
     if cfg_scale < 1:
@@ -50,7 +51,7 @@ def predict_role_logits(
     )
     if cfg_scale == 1:
         return _logits(
-            roles.forward_role(role, **common, **conditional), tuple(target_tokens.shape)
+            roles.forward_role(role, training=training, **common, **conditional), tuple(target_tokens.shape)
         )
     unconditional = dict(prompt_condition["unconditional"])
     if conditional.keys() != unconditional.keys():
@@ -71,7 +72,7 @@ def predict_role_logits(
             combined_common[key] = value
     combined_shape = (2 * batch_size, target_tokens.shape[1], target_tokens.shape[2])
     combined_logits = _logits(
-        roles.forward_role(role, **combined_common, **combined_prompt), combined_shape
+        roles.forward_role(role, training=training, **combined_common, **combined_prompt), combined_shape
     )
     unconditional_logits, conditional_logits = combined_logits.chunk(2, dim=0)
     return unconditional_logits + cfg_scale * (conditional_logits - unconditional_logits)

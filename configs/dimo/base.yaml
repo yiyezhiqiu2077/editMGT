@@ -16,6 +16,10 @@ model_roles:
   backend: shared_base_adapters
   student_trainable_scope: lora_and_region
   auxiliary_trainable_scope: lora_and_region
+  lora_dropout_policy: zero_for_dimo
+  student_lora_dropout: 0.0
+  auxiliary_lora_dropout: 0.0
+  teacher_lora_dropout: inherit
 
 initialization:
   mask_ratio: 0.5  # REFERENCE DEFAULT, NOT FORMAL

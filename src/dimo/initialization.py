@@ -145,7 +145,43 @@ def sample_student_tokens(
     return output.detach()
 
 
-def initialize_shared_model_roles(base_model, teacher_checkpoint: str):
+def build_role_lora_configs(lora: dict, model_roles: dict | None = None):
+    """Build role configs without mutating the selected teacher policy."""
+    from peft import LoraConfig
+
+    policy = dict(model_roles or {})
+    if policy.get("lora_dropout_policy", "zero_for_dimo") != "zero_for_dimo":
+        raise ValueError("unsupported DiMO LoRA dropout policy")
+    teacher_value = policy.get("teacher_lora_dropout", "inherit")
+    if teacher_value != "inherit":
+        raise ValueError("teacher_lora_dropout must be 'inherit'")
+    student_dropout = float(policy.get("student_lora_dropout", 0.0))
+    auxiliary_dropout = float(policy.get("auxiliary_lora_dropout", 0.0))
+    if student_dropout != 0.0 or auxiliary_dropout != 0.0:
+        raise ValueError("student and auxiliary LoRA dropout must be zero")
+
+    def make(dropout: float):
+        return LoraConfig(
+            r=int(lora["rank"]),
+            lora_alpha=int(lora["alpha"]),
+            lora_dropout=dropout,
+            target_modules=list(lora["target_modules"]),
+            init_lora_weights=True,
+        )
+
+    return {
+        "teacher": make(float(lora["dropout"])),
+        "student": make(student_dropout),
+        "auxiliary": make(auxiliary_dropout),
+    }
+
+
+def initialize_shared_model_roles(
+    base_model,
+    teacher_checkpoint: str,
+    *,
+    model_roles: dict | None = None,
+):
     """Load a compatible explicit-region SFT checkpoint into three adapters.
 
     This is a storage adapter only. Formal selection is enforced separately by
@@ -154,7 +190,6 @@ def initialize_shared_model_roles(base_model, teacher_checkpoint: str):
     import json
     from pathlib import Path
 
-    from peft import LoraConfig
     from peft.utils import set_peft_model_state_dict
     from safetensors.torch import load_file
 
@@ -163,15 +198,9 @@ def initialize_shared_model_roles(base_model, teacher_checkpoint: str):
     root = Path(teacher_checkpoint)
     trainable = json.loads((root / "trainable_config.json").read_text(encoding="utf-8"))
     lora = trainable["lora"]
-    adapter_config = LoraConfig(
-        r=int(lora["rank"]),
-        lora_alpha=int(lora["alpha"]),
-        lora_dropout=float(lora["dropout"]),
-        target_modules=list(lora["target_modules"]),
-        init_lora_weights=True,
-    )
+    adapter_configs = build_role_lora_configs(lora, model_roles)
     for role in ("teacher", "student", "auxiliary"):
-        base_model.add_adapter(adapter_config, adapter_name=role)
+        base_model.add_adapter(adapter_configs[role], adapter_name=role)
     teacher_state = load_file(root / "adapter_model.safetensors")
     result = set_peft_model_state_dict(base_model, teacher_state, adapter_name="teacher")
     if getattr(result, "unexpected_keys", None):

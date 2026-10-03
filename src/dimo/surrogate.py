@@ -18,7 +18,11 @@ def surrogate_logit_loss(
     counts = flat_mask.sum(1)
     if (counts == 0).any():
         raise ValueError("each sample must contain at least one pseudo-masked token")
-    target = (student_logits - dimo_gradient).detach()
-    token_loss = 0.5 * (student_logits - target).square().sum(dim=-1)
+    # Keep the complete vocabulary-SUM surrogate in FP32. Autograd casts the
+    # resulting gradient back to a lower-precision leaf only at that boundary.
+    student_fp32 = student_logits.float()
+    gradient_fp32 = dimo_gradient.float()
+    target = (student_fp32 - gradient_fp32).detach()
+    token_loss = 0.5 * (student_fp32 - target).square().sum(dim=-1)
     per_sample = (token_loss.flatten(1) * flat_mask).sum(1) / counts
     return per_sample.mean()

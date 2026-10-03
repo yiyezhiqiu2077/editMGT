@@ -28,10 +28,11 @@ from torch.utils.data import DataLoader
 from src.dataset_utils import encode_prompt, tokenize_prompt
 from src.dimo.checkpoint import config_hash, load_dimo_checkpoint, save_dimo_checkpoint
 from src.dimo.contracts import (
-    DIMO_UPSTREAM_COMMIT, enforce_run_guard, load_teacher_contract,
-    resolve_teacher_checkpoint,
+    DIMO_UPSTREAM_COMMIT, build_inference_fingerprint, enforce_run_guard,
+    load_teacher_contract, resolve_teacher_checkpoint, teacher_bundle_fingerprint,
 )
 from src.dimo.ema import TrainableEMA
+from src.dimo.diagnostics import run_nonzero_signal_diagnostic
 from src.dimo.initialization import initialize_shared_model_roles
 from src.dimo.roles import audit_role_optimizers
 from src.dimo.step import complete_dimo_step
@@ -201,7 +202,9 @@ def main() -> None:
         config["model"]["repo_or_root"], torch_dtype=dtype, vq_dtype=torch.float32,
         identity_output=output / "component_identity.json",
     )
-    roles = initialize_shared_model_roles(components.transformer, teacher_path)
+    roles = initialize_shared_model_roles(
+        components.transformer, teacher_path, model_roles=config["model_roles"]
+    )
     roles.to(device)
     components.text_encoder.to(device=device, dtype=dtype).eval().requires_grad_(False)
     components.llm_encoder.to(device=device, dtype=dtype).eval().requires_grad_(False)
@@ -237,7 +240,18 @@ def main() -> None:
         roles, student_optimizer, auxiliary_optimizer,
         output / "dimo_trainable_parameter_report.json",
     )
-    teacher_hash = sha256_file(Path(teacher_path) / "adapter_model.safetensors")
+    teacher_bundle = teacher_bundle_fingerprint(
+        teacher_path, base_model_identity=components.identity, formal=False
+    )
+    (output / "teacher_bundle_fingerprint.json").write_text(
+        json.dumps(teacher_bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    inference_identity = build_inference_fingerprint(
+        teacher_bundle_sha256=teacher_bundle["bundle_sha256"],
+        base_model_identity=components.identity,
+        model_roles=config["model_roles"],
+        upstream_commit=DIMO_UPSTREAM_COMMIT,
+    )
     resolved_hash = config_hash(config)
     committed_step = cursor = epoch = 0
     if args.resume:
@@ -245,7 +259,9 @@ def main() -> None:
             args.resume, roles=roles, student_optimizer=student_optimizer,
             auxiliary_optimizer=auxiliary_optimizer, student_scheduler=student_scheduler,
             auxiliary_scheduler=auxiliary_scheduler, student_ema=ema,
-            expected_config_hash=resolved_hash, expected_teacher_hash=teacher_hash,
+            expected_config_hash=resolved_hash,
+            expected_teacher_bundle_fingerprint=teacher_bundle,
+            expected_inference_fingerprint=inference_identity,
             expected_upstream_commit=DIMO_UPSTREAM_COMMIT,
         )
         committed_step = int(state["global_dimo_step"])
@@ -271,6 +287,18 @@ def main() -> None:
             if committed_step >= invocation_stop:
                 break
             prepared = prepare_batch(batch, components, config, device)
+            diagnostic_path = output / "dimo_nonzero_signal_test.json"
+            if committed_step == 0 and not args.resume and not diagnostic_path.exists():
+                run_nonzero_signal_diagnostic(
+                    roles,
+                    target_tokens=prepared["source_tokens"],
+                    reference_tokens=prepared["source_tokens"],
+                    edit_region_mask=prepared["edit_region_mask"],
+                    prompt_condition=prepared["prompt_condition"],
+                    model_kwargs=prepared["model_kwargs"],
+                    output_path=diagnostic_path,
+                    epsilon=1e-3,
+                )
             diagnostics, artifacts = complete_dimo_step(
                 roles, **prepared, student_optimizer=student_optimizer,
                 auxiliary_optimizer=auxiliary_optimizer, student_scheduler=student_scheduler,
@@ -299,7 +327,9 @@ def main() -> None:
                 auxiliary_scheduler=auxiliary_scheduler, student_ema=ema,
                 committed_dimo_step=committed_step, fixed_corpus_cursor=cursor,
                 epoch=epoch, samples_consumed=cursor, config_sha256=resolved_hash,
-                teacher_checkpoint_hash=teacher_hash, upstream_commit=DIMO_UPSTREAM_COMMIT,
+                teacher_bundle_fingerprint=teacher_bundle,
+                inference_fingerprint=inference_identity,
+                upstream_commit=DIMO_UPSTREAM_COMMIT,
             )
             print(json.dumps(diagnostics, sort_keys=True), flush=True)
     if committed_step == 0:

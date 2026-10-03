@@ -87,6 +87,11 @@ never optimizer members. Student and auxiliary adapters/region embeddings are
 copied from the teacher state, then optimized by disjoint optimizers. Adapter
 switching and `edit_region_embedding_override` allow one base allocation.
 
+Student and auxiliary adapters use the teacher's rank, alpha, targets, and
+initial weights, but their DiMO LoRA dropout is explicitly fixed to `0.0`.
+The teacher retains its SFT dropout configuration and always runs in eval
+mode. This is an initialization policy, not a change to the selected teacher.
+
 The formal checkpoint contract includes compatible base identity, LoRA state,
 region-embedding state, content fingerprint, training-config identity, source
 Git SHA, selected checkpoint identity, and an explicit `formal_teacher` flag.
@@ -115,9 +120,35 @@ The independent namespaces are `dimo-init-mask`, `dimo-init-token`,
 `dimo-student-sample`, `dimo-teacher-query-mask`, `dimo-aux-query-mask`, and
 `dimo-embedding-noise`. A checkpoint contains committed step, both optimizers
 and schedulers, both adapter/region states, student EMA, epoch, fixed-corpus
-cursor, samples consumed, config hash, teacher hash, and this upstream commit.
+cursor, samples consumed, config hash, teacher bundle fingerprint/hash,
+inference fingerprint, and this upstream commit.
 Resume begins at the next complete step; partial student-only checkpoints are
 invalid.
+
+## PREP-v1.1 correctness patch
+
+PREP-v1.1 leaves Region initialization, ROI pseudo-forward, FKL/RKL/Jeffreys
+formulae, and the same-batch auxiliary update unchanged. It narrows six
+correctness contracts:
+
+- one-step student inference explicitly selects eval mode and runs under
+  `torch.inference_mode()`; training calls retain their previous train-mode
+  default;
+- teacher/auxiliary distribution algebra and the complete vocabulary-SUM
+  surrogate execute in FP32, with per-sample masked normalization unchanged;
+- gradient-checkpoint recomputation is regression-tested after the intervening
+  teacher and auxiliary adapter switches;
+- teacher identity attests the adapter, region embedding, trainable config,
+  optional fingerprint/manifest, and released base-model identity as one
+  canonical bundle;
+- inference selects `--weights student|ema` (default `student`) and fails closed
+  on schema, teacher bundle, upstream commit, or inference fingerprint mismatch;
+- student/auxiliary LoRA dropout is explicitly zero, while teacher dropout is
+  inherited and inactive in eval mode.
+
+`number_of_transformer_forwards=1` counts model invocations. With CFG greater
+than one, that one invocation uses a batched unconditional/conditional input of
+size `2B`; metadata records `effective_cfg_batch_multiplier=2`.
 
 ### Formal teacher selection (pending)
 

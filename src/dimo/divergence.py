@@ -21,8 +21,9 @@ def dimo_divergence_gradient(
         raise ValueError("temperatures must be positive")
     if not 0 <= beta <= 1:
         raise ValueError("Jeffreys beta must be in [0,1]")
-    log_teacher = torch.log_softmax(teacher_logits / temperature_teacher, dim=-1)
-    log_auxiliary = torch.log_softmax(auxiliary_logits / temperature_auxiliary, dim=-1)
+    # Distribution algebra is deliberately FP32 even under BF16 autocast.
+    log_teacher = torch.log_softmax(teacher_logits.float() / temperature_teacher, dim=-1)
+    log_auxiliary = torch.log_softmax(auxiliary_logits.float() / temperature_auxiliary, dim=-1)
     teacher_prob = log_teacher.exp()
     auxiliary_prob = log_auxiliary.exp()
     fkl = auxiliary_prob - teacher_prob
@@ -41,4 +42,4 @@ def dimo_divergence_gradient(
         if pseudo_mask.shape != gradient.shape[:-1]:
             raise ValueError("pseudo_mask must match all non-vocabulary logit dimensions")
         gradient = gradient.masked_fill(~pseudo_mask.bool().unsqueeze(-1), 0)
-    return torch.nan_to_num(gradient).detach()
+    return torch.nan_to_num(gradient.float()).detach()

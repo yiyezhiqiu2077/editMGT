@@ -35,3 +35,27 @@ class TrainableEMA:
             raise RuntimeError("EMA state parameter identity mismatch")
         self.decay = float(state["decay"])
         self.shadow = {name: value.detach().cpu().float().clone() for name, value in state["shadow"].items()}
+
+
+@torch.no_grad()
+def apply_ema_to_student_role(roles, ema_state: dict[str, object]) -> None:
+    """Strictly apply an FP32 EMA shadow to the student's live parameters."""
+    if not isinstance(ema_state, dict) or "shadow" not in ema_state:
+        raise RuntimeError("invalid student EMA state")
+    current = dict(roles.role_named_parameters("student"))
+    shadow = ema_state["shadow"]
+    if not isinstance(shadow, dict) or set(shadow) != set(current):
+        raise RuntimeError("EMA state parameter identity mismatch")
+    for name, parameter in current.items():
+        value = shadow[name]
+        if not isinstance(value, torch.Tensor):
+            raise RuntimeError(f"EMA tensor is invalid: {name}")
+        if value.shape != parameter.shape:
+            raise RuntimeError(f"EMA parameter shape mismatch: {name}")
+        if value.dtype != torch.float32:
+            raise RuntimeError(f"EMA parameter dtype must be float32: {name}")
+        if not torch.is_floating_point(parameter):
+            raise RuntimeError(f"student parameter dtype is not floating: {name}")
+    for name, parameter in current.items():
+        value = shadow[name]
+        parameter.copy_(value.to(device=parameter.device, dtype=parameter.dtype))

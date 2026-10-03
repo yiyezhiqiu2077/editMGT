@@ -12,7 +12,23 @@ from typing import Any
 
 DIMO_EDIT_FORMAL_READY = False
 DIMO_UPSTREAM_COMMIT = "24613741ec9ca730273a6ebc822327878d5a086b"
+DIMO_MODEL_ROLES_V11 = {
+    "backend": "shared_base_adapters",
+    "student_trainable_scope": "lora_and_region",
+    "auxiliary_trainable_scope": "lora_and_region",
+    "lora_dropout_policy": "zero_for_dimo",
+    "student_lora_dropout": 0.0,
+    "auxiliary_lora_dropout": 0.0,
+    "teacher_lora_dropout": "inherit",
+}
 TEACHER_MANIFEST = "dimo_teacher_manifest.json"
+TEACHER_BUNDLE_FILES = {
+    "adapter_sha256": "adapter_model.safetensors",
+    "mask_conditioning_sha256": "mask_conditioning.safetensors",
+    "trainable_config_sha256": "trainable_config.json",
+    "fingerprint_sha256": "fingerprint.json",
+    "teacher_manifest_sha256": TEACHER_MANIFEST,
+}
 REQUIRED_TEACHER_FIELDS = {
     "base_model_identity",
     "lora_state",
@@ -44,6 +60,56 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_hash(value: object) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def teacher_bundle_fingerprint(
+    checkpoint: str | Path,
+    *,
+    base_model_identity: object,
+    formal: bool = False,
+) -> dict[str, Any]:
+    """Fingerprint every artifact that defines the teacher's behavior."""
+    root = Path(checkpoint).expanduser().resolve()
+    result: dict[str, Any] = {"base_model_identity": base_model_identity}
+    missing = []
+    for field, filename in TEACHER_BUNDLE_FILES.items():
+        path = root / filename
+        result[field] = _sha256(path) if path.is_file() else None
+        if not path.is_file():
+            missing.append(filename)
+    required = set(TEACHER_BUNDLE_FILES.values()) if formal else {
+        "adapter_model.safetensors", "mask_conditioning.safetensors", "trainable_config.json"
+    }
+    required_missing = sorted(set(missing) & required)
+    if base_model_identity in (None, "", {}):
+        required_missing.append("base_model_identity")
+    if required_missing:
+        mode = "formal" if formal else "prep"
+        raise RuntimeError(f"{mode} teacher bundle is incomplete: {sorted(required_missing)}")
+    result["missing_optional_files"] = sorted(set(missing) - required)
+    result["bundle_sha256"] = _canonical_hash(result)
+    return result
+
+
+def build_inference_fingerprint(
+    *,
+    teacher_bundle_sha256: str,
+    base_model_identity: object,
+    model_roles: dict[str, Any],
+    upstream_commit: str,
+) -> dict[str, Any]:
+    payload = {
+        "teacher_bundle_sha256": teacher_bundle_sha256,
+        "base_model_identity": base_model_identity,
+        "model_roles": model_roles,
+        "dimo_upstream_reference_commit": upstream_commit,
+    }
+    return payload | {"sha256": _canonical_hash(payload)}
+
+
 def load_teacher_contract(
     checkpoint: str | Path,
     *,
@@ -59,7 +125,10 @@ def load_teacher_contract(
         raise RuntimeError(f"teacher checkpoint contract is incomplete: {missing}")
     if expected_base_identity is not None and manifest["base_model_identity"] != expected_base_identity:
         raise RuntimeError("teacher checkpoint base snapshot is incompatible")
-    return TeacherCheckpointContract(root, manifest, _sha256(manifest_path))
+    bundle = teacher_bundle_fingerprint(
+        root, base_model_identity=manifest["base_model_identity"], formal=True
+    )
+    return TeacherCheckpointContract(root, manifest, bundle["bundle_sha256"])
 
 
 def resolve_teacher_checkpoint(value: str | None) -> str | None:
