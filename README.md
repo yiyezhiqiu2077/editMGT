@@ -166,19 +166,4 @@ uv run python -m compileall src scripts tests
 - [环境与资产](docs/ENVIRONMENT.md)
 - [完整实验流程](docs/EXPERIMENTS.md)
 
-## 上游项目、引用与许可证
 
-本仓库衍生自[官方 EditMGT 仓库](https://github.com/weichow23/editmgt)。这是一个实验研究分支，不代表本仓库维护者是原始 EditMGT 论文作者。
-
-原始论文：*EditMGT: Unleashing Potentials of Masked Generative Transformers in Image Editing*。
-
-```bibtex
-@article{chow2025editmgt,
-  title={EditMGT: Unleashing Potentials of Masked Generative Transformers in Image Editing},
-  author={Chow, Wei and Li, Linfeng and Kong, Lingdong and Li, Zefeng and Xu, Qi and Song, Hang and Ye, Tian and Wang, Xian and Bai, Jinbin and Xu, Shilin and others},
-  journal={arXiv preprint arXiv:2512.11715},
-  year={2025}
-}
-```
-
-上游 [CC-BY-4.0 许可证](LICENSE)保持不变。
