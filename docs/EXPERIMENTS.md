@@ -55,7 +55,7 @@ bash scripts/setup/run_formal_prepare.sh --dry-run
 bash scripts/setup/run_formal_prepare.sh --run
 ```
 
-该命令自动完成依赖安装、pinned 资产下载、schema contract 比较、canonicalization、NLLB 翻译、QA、去重与确定性 backfill、exact 200K、FP32 VQ 审计和 `CORPUS_READY.json`。没有运行时人工 mapping 或人工批准步骤。翻译抽样与 montage 仍会生成，但仅是诊断 artifact。
+该命令自动完成依赖安装、pinned 资产下载、schema contract 比较、canonicalization、NLLB 翻译、QA、去重与确定性 backfill、exact 200K、FP32 VQ 审计和 `CORPUS_READY.json`。
 
 00–12 每阶段都绑定 Git、配置、上游 marker 和 resolved revisions。身份未变时重跑会跳过；发生变化时，该阶段及下游 marker 自动失效。
 
