@@ -86,3 +86,70 @@ def test_synthetic_four_dataset_fixed_200_with_translation_backfill(tmp_path):
     backfills=[json.loads(line) for line in (output/"backfill_history.jsonl").read_text().splitlines()]
     assert rejections and any("copy_output" in row["qa_flags"] for row in rejections)
     assert any(row["reason"]=="translation_qa" for row in backfills)
+
+
+def test_cold_cache_pending_preserves_quota_and_requests_before_exhaustion(tmp_path):
+    # Exactly enough Inter-Edit rows: treating missing translation as rejection
+    # used to consume reserve and raise before writing any translation requests.
+    pools = {"magicbrush": [synthetic_record("magicbrush", 0)],
+             "crispedit": [], "scaleedit": [], "interedit": []}
+    for i, kind in enumerate(("Add", "Remove", "Local", "Texture")):
+        row = synthetic_record("interedit", i, original_type=kind,
+                               canonical_type="local_attribute" if kind == "Local" else kind.lower())
+        row.update(instruction_original=f"把物体改成红色 {i}", instruction_en="",
+                   language_original="zho_Hans", translation_status="pending")
+        row["sample_uid"] = sample_uid_for(row)
+        pools["interedit"].append(row)
+    config = yaml.safe_load(Path("configs/data/fixed_200k.yaml").read_text())
+    config["train_total"] = 5
+    config["translation"]["immutable_revision"] = "fixture-translation-rev"
+    config_path = tmp_path / "config.yaml"; config_path.write_text(yaml.safe_dump(config))
+    cache = tmp_path / "cache.jsonl"; cache.write_text("")
+    output = tmp_path / "fixed"
+    command = [sys.executable, "scripts/data/build_fixed_200k_corpus.py", "--config", str(config_path),
+               "--translation-cache", str(cache), "--output-dir", str(output), "--allow-nonproduction-total"]
+    for name, rows in pools.items():
+        path = tmp_path / f"{name}.jsonl"; write_jsonl(path, rows)
+        command.extend([f"--{name}-pool", str(path)])
+    cold = subprocess.run(command, capture_output=True, text=True)
+    assert cold.returncode == 42, cold.stderr
+    requested = [json.loads(line) for line in (output / "translation_required.jsonl").read_text().splitlines()]
+    assert len(requested) == 4
+    assert {r["sample_uid"] for r in requested} == {r["sample_uid"] for r in pools["interedit"]}
+    assert not (output / "train_5.jsonl").exists()
+    cache_rows = []
+    for i, row in enumerate(pools["interedit"]):
+        text = row["instruction_original"]
+        cache_rows.append({"source_text": text, "translated_text": f"Make it red {i}",
+                           "cache_key": translation_cache_key(text, "nllb", "fixture-translation-rev",
+                               "zho_Hans", "eng_Latn", config["translation"]["decoding"])})
+    write_jsonl(cache, cache_rows)
+    warm = subprocess.run(command, capture_output=True, text=True)
+    assert warm.returncode == 0, warm.stderr
+    frozen = (output / "train_5.jsonl").read_bytes()
+    subprocess.run(command, check=True, capture_output=True)
+    assert (output / "train_5.jsonl").read_bytes() == frozen
+    assert not (output / "translation_required.jsonl").exists()
+    report = json.loads((output / "selection_report.json").read_text())
+    assert report["dataset_counts"] == {"magicbrush": 1, "interedit": 4}
+    assert report["interedit_requested_quota"] == 4
+
+
+def test_general_pending_does_not_transfer_quota_to_interedit(tmp_path):
+    pools = {"magicbrush": [synthetic_record("magicbrush", i) for i in range(2)],
+             "crispedit": [], "scaleedit": [], "interedit": []}
+    for row in pools["magicbrush"]:
+        row.update(instruction_original="把物体改成红色", instruction_en="", language_original="zho_Hans",
+                   translation_status="pending")
+        row["sample_uid"] = sample_uid_for(row)
+    config = yaml.safe_load(Path("configs/data/fixed_200k.yaml").read_text())
+    config["train_total"] = 2; config["translation"]["immutable_revision"] = "fixture-rev"
+    config_path = tmp_path / "config.yaml"; config_path.write_text(yaml.safe_dump(config))
+    command = [sys.executable, "scripts/data/build_fixed_200k_corpus.py", "--config", str(config_path),
+               "--translation-cache", str(tmp_path / "absent-cache.jsonl"), "--output-dir", str(tmp_path / "out"),
+               "--allow-nonproduction-total"]
+    for name, rows in pools.items():
+        path = tmp_path / f"{name}.jsonl"; write_jsonl(path, rows); command.extend([f"--{name}-pool", str(path)])
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 42, result.stderr
+    assert json.loads((tmp_path / "out/translation_required.jsonl").read_text())["dataset"] == "magicbrush"

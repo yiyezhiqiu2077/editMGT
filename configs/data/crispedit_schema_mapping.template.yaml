@@ -1,6 +1,10 @@
 schema_audit_status: NOT_RUN
 dataset_name: crispedit
 dataset_revision: REPLACE_WITH_IMMUTABLE_REVISION
+schema_audit:
+  path: /REPLACE_WITH_ABSOLUTE_REAL_SCHEMA_AUDIT_REPORT
+  sha256: REPLACE_WITH_REPORT_SHA256
+  dataset_revision: REPLACE_WITH_IMMUTABLE_REVISION
 format: parquet
 files_glob: "**/*.parquet"
 mask_semantics: REPLACE_AFTER_REAL_AUDIT

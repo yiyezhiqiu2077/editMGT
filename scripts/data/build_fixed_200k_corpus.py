@@ -19,9 +19,8 @@ from src.explicit_region.contracts import sha256_file
 from src.explicit_region.fixed_corpus import (
     DATASET_PRIORITY, apply_translation, assert_frozen_corpus, canonical_freeze_order,
     collapse_exact_sample_duplicates, corpus_counts, deterministic_order,
-    select_interedit, selection_hash,
+    select_interedit, MissingTranslation, cached_translator, validate_frozen_language,
 )
-from src.explicit_region.language import translation_cache_key
 
 
 def read_jsonl(path: str | Path) -> list[dict]:
@@ -48,8 +47,12 @@ def main() -> None:
     if total != 200000 and not args.allow_nonproduction_total:
         raise SystemExit("production fixed corpus total must be exactly 200000")
     output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
+    (output / "CORPUS_READY.json").unlink(missing_ok=True)
+    (output / "translation_required.jsonl").unlink(missing_ok=True)
 
     validation = [row for path in args.validation for row in read_jsonl(path)]
+    for row in validation:
+        validate_record(row); validate_frozen_language(row)
     validation_sources = {row["source_sha256"] for row in validation}
     validation_groups = {(row["dataset_name"], row["group_id"]) for row in validation}
     pools, exact_removed = {}, []
@@ -65,26 +68,16 @@ def main() -> None:
         exact_removed.extend({"reason": "same_dataset_exact_duplicate", "dataset": name,
                               "sample_uid": row["sample_uid"]} for row in removed)
 
-    cache_rows = read_jsonl(args.translation_cache)
-    translations = defaultdict(list)
-    for row in cache_rows:
-        translations[row["source_text"]].append(row)
+    translate = cached_translator(args.translation_cache, translation_config)
 
-    class MissingTranslation(RuntimeError):
-        pass
-
-    def translate(text, _row):
-        expected_key = translation_cache_key(
-            text, translation_config["backend"], translation_config["immutable_revision"],
-            translation_config["src_lang"], translation_config["tgt_lang"],
-            translation_config["decoding"],
-        )
-        available = [row for row in translations.get(text, []) if row.get("cache_key") == expected_key]
-        if not available:
-            raise MissingTranslation(text)
-        if len(available) != 1:
-            raise RuntimeError(f"ambiguous translation cache entries for {text!r}")
-        return available[0]["translated_text"], expected_key
+    def request_pending() -> None:
+        if not translation_required:
+            return
+        unique_required = {row["instruction_original"]: row for row in translation_required}
+        write_jsonl(output / "translation_required.jsonl", list(unique_required.values()))
+        print(json.dumps({"status": "TRANSLATION_REQUIRED", "unique_prompts": len(unique_required),
+                          "path": str(output / "translation_required.jsonl")}))
+        raise SystemExit(42)
 
     candidate_artifact, reserve_artifact = [], []
     translation_rejections, translation_required, backfill_history, duplicate_events = [], [], [], list(exact_removed)
@@ -104,6 +97,9 @@ def main() -> None:
             provisional_owner.setdefault(row["source_sha256"], name)
 
     def select_general(name: str, cap: int) -> None:
+        if cap == 0:
+            return
+        occupied = 0
         ordered = general_orders[name]
         candidate_artifact.extend(dict(row, selection_phase="provisional") for row in ordered[:cap])
         reserve_artifact.extend(dict(row, selection_phase="reserve") for row in ordered[cap:])
@@ -128,6 +124,13 @@ def main() -> None:
             except MissingTranslation:
                 translation_required.append({"dataset": name, "sample_uid": row["sample_uid"],
                                              "instruction_original": row["instruction_original"]})
+                # Hold this exact slot. Pending is not a QA rejection and must
+                # neither consume reserve nor transfer quota to Inter-Edit.
+                occupied += 1
+                owned_source.setdefault(row["source_sha256"], name)
+                provisional_owner.setdefault(row["source_sha256"], name)
+                if occupied == cap:
+                    return
                 continue
             if translated is None:
                 translation_rejections.append({"dataset": name, "sample_uid": row["sample_uid"], "qa_flags": flags})
@@ -136,12 +139,15 @@ def main() -> None:
             provisional_owner.setdefault(row["source_sha256"], name)
             if position >= cap:
                 backfill_history.append({"dataset": name, "reason": "general_reserve_backfill", "sample_uid": row["sample_uid"]})
-            if len(selected[name]) == cap:
+            occupied += 1
+            if occupied == cap:
                 return
 
-    select_general("magicbrush", magic_target)
-    select_general("crispedit", crisp_target)
-    select_general("scaleedit", scale_target)
+    for name, target in general_targets.items():
+        select_general(name, target)
+        # Resolve a higher-priority dataset before touching lower-priority
+        # ownership or computing the remaining Inter-Edit quota.
+        request_pending()
 
     inter_quota = total - sum(len(selected[name]) for name in ("magicbrush", "crispedit", "scaleedit"))
     if inter_quota < 0:
@@ -170,9 +176,7 @@ def main() -> None:
         return None
 
     queue = deque(provisional)
-    while len(selected["interedit"]) < inter_quota:
-        if not queue:
-            raise RuntimeError("INSUFFICIENT_INTEREDIT_ELIGIBLE_DATA after translation QA")
+    while queue:
         row = queue.popleft()
         owner = provisional_owner.get(row["source_sha256"], owned_source.get(row["source_sha256"]))
         if owner is not None and owner != "interedit":
@@ -188,8 +192,8 @@ def main() -> None:
             translation_required.append({"dataset": "interedit", "sample_uid": row["sample_uid"],
                                          "instruction_original": row["instruction_original"],
                                          "selection_stratum": row["selection_stratum"]})
-            replacement = next_reserve(row["selection_stratum"])
-            if replacement: queue.append(replacement)
+            # Leave the selected stratum slot pending; only a known QA failure
+            # can consume its deterministic reserve.
             continue
         if translated is None:
             translation_rejections.append({"dataset": "interedit", "sample_uid": row["sample_uid"], "qa_flags": flags})
@@ -203,12 +207,9 @@ def main() -> None:
             continue
         selected["interedit"].append(translated); owned_source.setdefault(row["source_sha256"], "interedit")
 
-    if translation_required:
-        unique_required = {row["instruction_original"]: row for row in translation_required}
-        write_jsonl(output / "translation_required.jsonl", list(unique_required.values()))
-        print(json.dumps({"status": "TRANSLATION_REQUIRED", "unique_prompts": len(unique_required),
-                          "path": str(output / "translation_required.jsonl")}))
-        raise SystemExit(42)
+    request_pending()
+    if len(selected["interedit"]) != inter_quota:
+        raise RuntimeError("INSUFFICIENT_INTEREDIT_ELIGIBLE_DATA after translation QA")
 
     frozen = canonical_freeze_order([row for name in DATASET_PRIORITY for row in selected[name]], seed)
     assert_frozen_corpus(frozen, total)
@@ -247,7 +248,7 @@ def main() -> None:
         "train_sha256": sha256_file(train_path), "selection_config_sha256": sha256_file(args.config),
         "source_pool_hashes": {name: sha256_file(getattr(args, f"{name}_pool")) for name in DATASET_PRIORITY},
         "dataset_revisions": {name: sorted({row["dataset_revision"] for row in pools[name]}) for name in DATASET_PRIORITY},
-        "validation_hashes": {str(path): sha256_file(path) for path in args.validation},
+        "validation_hashes": {str(Path(path).resolve()): sha256_file(path) for path in args.validation},
         "translation_cache_sha256": sha256_file(args.translation_cache),
         "translation_contract": translation_config,
         "duplicate_policy": config["duplicate_policy"],

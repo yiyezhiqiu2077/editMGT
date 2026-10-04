@@ -174,6 +174,7 @@ class Pipeline(DiffusionPipeline):
         lora_part_enable: Optional[bool] = False,       
         lora_scale: Optional[float] = None,
         lora_scope: Optional[str] = None,
+        persistent_conditioning: bool = True,
         inference_timestep_mode: str = "roi_relative",
     ):
         """
@@ -451,7 +452,7 @@ class Pipeline(DiffusionPipeline):
                         lora_part_enable=lora_part_enable,
                         lora_scope=lora_scope,
                         edit_region_mask=model_edit_region_mask,
-                        edit_region_conditioning_active=model_edit_region_mask is not None,
+                        edit_region_conditioning_active=persistent_conditioning and model_edit_region_mask is not None,
                     )
                 else:
                     # text to image
@@ -467,7 +468,7 @@ class Pipeline(DiffusionPipeline):
                             device=model_input.device, dtype=torch.float32,
                         ),
                         edit_region_mask=model_edit_region_mask,
-                        edit_region_conditioning_active=model_edit_region_mask is not None,
+                        edit_region_conditioning_active=persistent_conditioning and model_edit_region_mask is not None,
                     )
 
                 if guidance_scale > 1.0:

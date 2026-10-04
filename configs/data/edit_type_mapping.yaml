@@ -7,8 +7,31 @@ datasets:
     Remove: remove
     Local: local_attribute
     Texture: texture
-  crispedit: {}
-  scaleedit: {}
-# CrispEdit/ScaleEdit mappings must be filled only after their real schema
-# audits identify the actual labeling taxonomy. Unknown fixture labels map to
-# other in tests, but formal corpus preparation rejects an incomplete mapping.
+  crispedit:
+    add: add
+    color: local_attribute
+    motion change: motion
+    remove: remove
+    replace: replace
+  scaleedit:
+    action_editing: motion
+    building_surface_text_editing: other
+    color_change: local_attribute
+    compositional_editing: other
+    count_change: other
+    gui_interface_text_editing: other
+    material_change: texture
+    movie_poster_text_editing: other
+    object_addition: add
+    object_removal: remove
+    object_replacement: replace
+    object_surface_text_editing: other
+    perceptual_reasoning: other
+    scientific_reasoning: other
+    size_change: local_attribute
+    social_reasoning: other
+    symbolic_reasoning: other
+# Observed labeled releases: CrispEdit dcbd1c952e93e4361ad862b33f3acd1cc74bec5a,
+# ScaleEdit f97ffb061d4275bcbbff6500572139b6f8df1c4e. Text, count, composition,
+# and reasoning tasks have no unambiguous narrower canonical class: retain
+# their original labels and map to other rather than invent an operation.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -46,6 +47,7 @@ def audit_parquet(paths: list[Path]) -> dict:
     import pyarrow.parquet as pq
     rows, columns, nulls, presence = 0, set(), Counter(), Counter()
     schemas = set()
+    categorical = {key: Counter() for key in ("edit_type", "type", "final_task", "better_data", "mask__qc_flag")}
     for path in paths:
         parquet = pq.ParquetFile(path)
         rows += parquet.metadata.num_rows
@@ -54,26 +56,31 @@ def audit_parquet(paths: list[Path]) -> dict:
             presence[name] += parquet.metadata.num_rows
         schemas.add(tuple(names))
         columns.update(names)
-        for batch in parquet.iter_batches(batch_size=4096):
+        for batch in parquet.iter_batches(batch_size=16):
             for name, array in zip(batch.schema.names, batch.columns):
                 nulls[name] += array.null_count
+                if name in categorical:
+                    categorical[name].update(json.dumps(value, ensure_ascii=False, sort_keys=True) for value in array.to_pylist())
     columns = sorted(columns)
     return {
         "row_count": rows, "columns": columns,
         "schema_variants": [list(value) for value in sorted(schemas)],
         "null_counts": dict(nulls),
         "missing_counts": {name: rows - presence[name] for name in sorted(presence)},
+        "categorical_counts": {key: dict(counts) for key, counts in categorical.items() if counts},
         "candidate_fields": candidate_roles(columns),
     }
 
 
 def audit_json(paths: list[Path]) -> dict:
     rows, columns, nulls, presence = 0, set(), Counter(), Counter()
-    file_rows = {}
+    file_rows, schemas = {}, Counter()
+    categorical = {key: Counter() for key in ("edit_type", "type", "final_task", "better_data", "mask__qc_flag")}
     for path in paths:
         before = rows
-        with path.open(encoding="utf-8") as handle:
-            if path.suffix == ".jsonl":
+        opener = gzip.open if path.name.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as handle:
+            if path.name.endswith((".jsonl", ".jsonl.gz")):
                 values = (json.loads(line) for line in handle if line.strip())
             else:
                 loaded = json.load(handle)
@@ -83,6 +90,10 @@ def audit_json(paths: list[Path]) -> dict:
                     continue
                 rows += 1
                 columns.update(row)
+                schemas[tuple(sorted(row))] += 1
+                for key, counts in categorical.items():
+                    if key in row:
+                        counts[json.dumps(row[key], ensure_ascii=False, sort_keys=True)] += 1
                 for key, value in row.items():
                     presence[key] += 1
                     if value is None or value == "":
@@ -93,6 +104,8 @@ def audit_json(paths: list[Path]) -> dict:
         "row_count": rows, "columns": names, "null_counts": dict(nulls),
         "missing_counts": {name: rows - presence[name] for name in names},
         "file_row_counts": file_rows,
+        "schema_variants": [{"columns": list(names), "rows": count} for names, count in sorted(schemas.items())],
+        "categorical_counts": {key: dict(counts) for key, counts in categorical.items() if counts},
         "candidate_fields": candidate_roles(names),
     }
 
@@ -109,7 +122,11 @@ def main() -> None:
         raise SystemExit(f"REAL_{args.dataset_name.upper()}_AUDIT=NOT_RUN root_missing={root}")
     inventory, identity = file_inventory(root)
     parquet = sorted(root.rglob("*.parquet"))
-    json_paths = sorted(root.rglob("*.jsonl")) + sorted(root.rglob("*.json"))
+    json_paths = sorted(root.rglob("*.jsonl")) + sorted(root.rglob("*.jsonl.gz"))
+    if not json_paths and not parquet:
+        json_paths = sorted(root.rglob("*.json"))
+    if not parquet and not json_paths:
+        raise SystemExit(f"REAL_{args.dataset_name.upper()}_AUDIT=NOT_RUN no_supported_records={root}")
     result = {
         "dataset_name": args.dataset_name, "dataset_revision": args.revision,
         "root": str(root), "local_identity": identity,

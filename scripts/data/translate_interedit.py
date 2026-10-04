@@ -29,7 +29,12 @@ def mock_translate(texts: list[str]) -> list[str]:
     return [table.get(text, "Translated instruction") for text in texts]
 
 
-def nllb_translate(texts, model_path, revision, decoding, batch_size, src_lang, tgt_lang):
+def iter_nllb_translation_batches(texts, model_path, revision, decoding, batch_size, src_lang, tgt_lang):
+    """Load the pinned translator once and yield one bounded, ordered batch."""
+    if batch_size <= 0:
+        raise ValueError("translation batch_size must be positive")
+    if not texts:
+        return
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -40,7 +45,6 @@ def nllb_translate(texts, model_path, revision, decoding, batch_size, src_lang, 
     ).to("cuda").eval()
     tokenizer.src_lang = src_lang
     forced_bos = tokenizer.convert_tokens_to_ids(tgt_lang)
-    outputs = []
     for start in range(0, len(texts), batch_size):
         encoded = tokenizer(texts[start : start + batch_size], return_tensors="pt", padding=True).to("cuda")
         with torch.inference_mode():
@@ -51,8 +55,18 @@ def nllb_translate(texts, model_path, revision, decoding, batch_size, src_lang, 
                 num_beams=int(decoding["num_beams"]),
                 max_new_tokens=int(decoding["max_new_tokens"]),
             )
-        outputs.extend(tokenizer.batch_decode(generated, skip_special_tokens=True))
-    return outputs
+        yield tokenizer.batch_decode(generated, skip_special_tokens=True)
+
+
+def nllb_translate(texts, model_path, revision, decoding, batch_size, src_lang, tgt_lang):
+    """Compatibility list API for callers that do not need incremental commits."""
+    return [
+        text
+        for batch in iter_nllb_translation_batches(
+            texts, model_path, revision, decoding, batch_size, src_lang, tgt_lang
+        )
+        for text in batch
+    ]
 
 
 def main() -> None:

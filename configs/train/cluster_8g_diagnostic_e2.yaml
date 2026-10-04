@@ -1,0 +1,6 @@
+extends: cluster_8g_e2.yaml
+run_type: diagnostic
+output_dir: ${EDITMGT_OUTPUT_ROOT}/branch-preflight-e2-2updates
+max_optimizer_steps: 2
+checkpoint_steps: [2]
+validation: {enabled: false}

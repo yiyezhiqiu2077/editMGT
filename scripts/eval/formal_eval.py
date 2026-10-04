@@ -19,6 +19,7 @@ import torch
 
 from src.explicit_region.config import load_config
 from src.explicit_region.metrics import MaskedLPIPS, masked_l1, masked_psnr, masked_ssim, finite_mean
+from src.explicit_region.selection import file_identity, sha256_file
 
 
 def tensor(path, *, mask=False):
@@ -55,15 +56,28 @@ def embed(image_path, backend, name, device):
     return getattr(output, "pooler_output", output.last_hidden_state[:, 0])
 
 
-def evaluate(manifest, config, output, device):
+def evaluate(manifest, config, output, device, *, expected_identity=None):
+    records = [json.loads(raw) for raw in Path(manifest).read_text(encoding="utf-8").splitlines() if raw.strip()]
+    if expected_identity is not None:
+        if not records or any(row.get("identity") != expected_identity for row in records):
+            raise ValueError("generation manifest contains missing/mismatched identities")
+        from collections import Counter
+        from src.explicit_region.selection import SEEDS
+        input_rows = [json.loads(line) for line in Path(expected_identity["manifest"]["path"]).read_text().splitlines() if line.strip()]
+        keys = [row.get("sample_uid", row.get("sample_key")) for row in input_rows]
+        pairs = [(row.get("sample_key"), row.get("seed")) for row in records]
+        if (any(type(seed) is not int for _, seed in pairs)
+                or Counter(pairs) != Counter({(key, seed): 1 for key in keys for seed in SEEDS})):
+            raise ValueError("missing/duplicate/unexpected evaluation samples or seeds")
+        for row in records:
+            for name in ("source", "target", "mask", "output"):
+                if row.get("image_sha256", {}).get(name) != sha256_file(row[name]):
+                    raise ValueError(f"generated evaluation image identity mismatch: {name}")
     lpips_metric = MaskedLPIPS(device=device)
     embeddings = embedding_backend(config, device)
     selection = config.get("selection", {})
     rows = []
-    for raw in Path(manifest).read_text(encoding="utf-8").splitlines():
-        if not raw.strip():
-            continue
-        record = json.loads(raw)
+    for record in records:
         source, target, generated = (tensor(record[key]).to(device) for key in ("source", "target", "output"))
         mask = tensor(record["mask"], mask=True).to(device)
         if source.shape != target.shape or source.shape != generated.shape or source.shape[-2:] != mask.shape[-2:]:
@@ -134,12 +148,17 @@ def evaluate(manifest, config, output, device):
                 aggregate[group][name] = {"mean": None, "standard_error": None, "bootstrap_95_ci": None}
                 continue
             rng=np.random.default_rng(int(bootstrap["seed"])); n=int(bootstrap["resamples"])
-            boot=values[rng.integers(0,len(values),size=(n,len(values)))].mean(1)
+            # Full DEV is thousands of samples; bound bootstrap memory, not its size.
+            boot=np.concatenate([values[rng.integers(0,len(values),size=(min(64,n-start),len(values)))].mean(1)
+                                 for start in range(0,n,64)])
             aggregate[group][name]={"mean":float(values.mean()),"standard_error":float(values.std(ddof=1)/np.sqrt(len(values))) if len(values)>1 else 0.0,
                                     "bootstrap_95_ci":[float(np.percentile(boot,2.5)),float(np.percentile(boot,97.5))]}
         aggregate[group]["samples"] = len(members)
     result = {
-        "schema": "formal-evaluator-v1", "manifest": str(Path(manifest).resolve()),
+        "schema": ("formal-evaluator-baseline-v1" if expected_identity.get("role") == "released_baseline" else "formal-evaluator-v2")
+                  if expected_identity is not None else "formal-evaluator-diagnostic-v1",
+        "identity": expected_identity, "manifest": str(Path(manifest).resolve()),
+        "predictions_manifest": file_identity(manifest),
         "thresholds_preregistered": selection.get("tau_edit") is not None and selection.get("tau_noop") is not None,
         "per_generation": rows, "per_sample_after_seed_mean": samples, "aggregate": aggregate,
     }
@@ -155,9 +174,32 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--predictions-manifest", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--dataset", choices=("magicbrush", "crispedit", "scaleedit", "interedit"))
+    parser.add_argument("--manifest", help="Frozen input dataset manifest, not predictions")
+    parser.add_argument("--preregistration")
+    parser.add_argument("--baseline-canonical", action="store_true")
+    parser.add_argument("--model-root")
+    parser.add_argument("--release-metadata")
+    parser.add_argument("--timestep-mode", choices=("roi_relative", "official_upstream_timestep"))
     args = parser.parse_args()
     started = time.perf_counter()
-    result = evaluate(args.predictions_manifest, load_config(args.config), args.output, "cuda" if torch.cuda.is_available() else "cpu")
+    if Path(args.output).exists():
+        parser.error("refusing to overwrite evaluation output")
+    identity = None
+    if args.baseline_canonical:
+        if args.checkpoint != "released" or not all((args.model_root, args.release_metadata, args.timestep_mode, args.dataset, args.manifest)):
+            parser.error("canonical E0 needs released checkpoint marker, model/release metadata/protocol and full DEV manifest")
+        from scripts.eval.generate_evaluation import prepare_baseline_evaluation
+        _, identity = prepare_baseline_evaluation(args.experiment, args.model_root, args.release_metadata, args.config,
+                              args.manifest, args.dataset, args.timestep_mode, args.preregistration)
+    elif args.checkpoint != "released":
+        from scripts.eval.generate_evaluation import prepare_evaluation
+        if not args.dataset or not args.manifest:
+            parser.error("trainable evaluation requires --dataset and --manifest")
+        _, identity = prepare_evaluation(args.experiment, args.checkpoint, args.config, args.manifest,
+                                         args.dataset, args.preregistration)
+    result = evaluate(args.predictions_manifest, load_config(args.config), args.output,
+                      "cuda" if torch.cuda.is_available() else "cpu", expected_identity=identity)
     print(json.dumps({"generations": len(result["per_generation"]), "samples": len(result["per_sample_after_seed_mean"]), "output": args.output, "wall_seconds": time.perf_counter()-started}))
 
 

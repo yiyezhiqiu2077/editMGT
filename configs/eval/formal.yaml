@@ -5,6 +5,13 @@ steps: 12
 guidance_scale: 10.0
 reference_strength: 1.0
 inference_timestep_mode: roi_relative
+released_baseline:
+  repo_id: WeiChow/EditMGT
+  revision: 0a00f14ea159728fb76ac99ed741f9deca5fee28
+  persistent_conditioning: false
+  lora_scope: both
+  trainable_adapter: false
+  ranking_eligible: false
 baselines:
   E0-official: {inference_timestep_mode: official_upstream_timestep}
   E0-region: {inference_timestep_mode: roi_relative}
@@ -12,7 +19,37 @@ generation_seeds: [0, 1, 2, 3]
 bootstrap: {seed: 42, resamples: 10000, unit: sample_after_seed_mean}
 report_datasets_separately: true
 selection:
-  status: MUST_BE_PREREGISTERED_BEFORE_FORMAL
-  threshold_preserve: null
-  tau_edit: null
-  tau_noop: null
+  status: preregistered
+  schema: fixed200k-selection-v1
+  primary_dataset: magicbrush
+  primary_split: official_dev
+  primary_manifest: ${DERIVED_ROOT}/fixed200k/validation/magicbrush_official_dev.jsonl
+  required_seeds: [0, 1, 2, 3]
+  averaging: sample_after_seed_mean
+  preservation_metric: outside_masked_lpips
+  threshold_preserve: 0.05
+  objective: inside_masked_lpips
+  direction: minimize
+  tau_edit: 0.05
+  tau_noop: 0.10
+  progress: d_SO/max(d_ST,1e-12)
+  tie_break: [no_op, earlier_step, fixed_experiment_name]
+  invalid_candidate: ineligible
+  no_eligible_candidate: no_selection_no_test
+  auxiliary_ranking: false
+  probe128_ranking: false
+  candidate_sets:
+    lr:
+      checkpoint_steps: [1500]
+      diagnostic_steps: [500, 1000]
+      experiments:
+        LR-1e-5: configs/train/cluster_8g_lr_1e-5.yaml
+        LR-3e-5: configs/train/cluster_8g_lr_3e-5.yaml
+        LR-5e-5: configs/train/cluster_8g_lr_5e-5.yaml
+    formal:
+      checkpoint_steps: [625, 1250, 1875, 2500, 3125, 3750, 4375, 5000, 5625, 6250]
+      experiments:
+        E1: configs/train/cluster_8g_e1.yaml
+        E2: configs/train/cluster_8g_e2.yaml
+        E3: configs/train/cluster_8g_e3.yaml
+        E4: configs/train/cluster_8g_e4.yaml

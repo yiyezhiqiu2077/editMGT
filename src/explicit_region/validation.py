@@ -43,6 +43,7 @@ def run_validation(*, components, transformer, train_config, step, output_dir, d
                       height=infer["resolution"],width=infer["resolution"],num_inference_steps=infer["steps"],
                       guidance_scale=infer["guidance_scale"],reference_strength=infer["reference_strength"],
                       generator=generator,lora_scope=train_config["lora"]["scope"],
+                      persistent_conditioning=train_config["corruption"]["persistent_conditioning"],
                       inference_timestep_mode=infer["inference_timestep_mode"]).images[0]
                     stem=f"{dataset_name}_{index:06d}_seed{seed}"; paths={}
                     for name,image in (("source",source),("target",target),("mask",mask),("output",generated)):
