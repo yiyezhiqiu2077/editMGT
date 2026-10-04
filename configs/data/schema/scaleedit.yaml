@@ -1,0 +1,43 @@
+schema_version: formal-schema-contract-v1
+dataset_name: scaleedit
+dataset_revision: f97ffb061d4275bcbbff6500572139b6f8df1c4e
+format: parquet
+files_glob: shards/**/*.parquet
+required_columns:
+  source_shard: string
+  row_idx: int64
+  sample_id: string
+  source_relative_path: string
+  final_task: string
+  final_instruction: string
+  source_image: binary
+  edited_image: binary
+  quality__verdict: string
+  quality__keep: bool
+  scene__verdict: string
+  scene__keep: bool
+  grounding__qc_flag: string
+  mask__mask_png: binary
+  mask__qc_flag: string
+fields:
+  source: {storage: embedded_parquet, column: source_image}
+  target: {storage: embedded_parquet, column: edited_image}
+  region: {storage: embedded_parquet, column: mask__mask_png}
+  instruction: final_instruction
+  edit_type: final_task
+  group_id: null
+eligibility:
+  quality__verdict: PASS
+  quality__keep: true
+  scene__verdict: PASS
+  scene__keep: true
+  grounding__qc_flag: OK
+  mask__qc_flag: OK
+known_edit_types: [action_editing, building_surface_text_editing, color_change,
+  compositional_editing, count_change, gui_interface_text_editing, material_change,
+  movie_poster_text_editing, object_addition, object_removal, object_replacement,
+  object_surface_text_editing, perceptual_reasoning, scientific_reasoning,
+  size_change, social_reasoning, symbolic_reasoning]
+mask_semantics: edit_region
+mask_polarity: white_is_edit_region
+verification: sampled_real_rows_at_pinned_revision

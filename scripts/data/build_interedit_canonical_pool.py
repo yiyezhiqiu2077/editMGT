@@ -29,7 +29,8 @@ def main():
         **{f"{name}_locator":locator for name,locator in locators.items()},**{f"{name}_sha256":sha256_bytes(value) for name,value in values.items()},
         "instruction_original":instruction,"instruction_en":"" if contains_han(instruction) else instruction,"language_original":"zho_Hans" if contains_han(instruction) else "en",
         "edit_type_original":item.edit_type,"edit_type_canonical":MAPPING[item.edit_type],"mask_semantics":"user_guidance_region","region_fraction":float(mask.mean()),
-        "translation_status":"pending" if contains_han(instruction) else "passthrough_en","translation_cache_key":None}
+        "translation_status":"pending" if contains_han(instruction) else "passthrough_en","translation_cache_key":None,
+        "better_data":True}
    row["sample_uid"]=sample_uid_for(row);rows.append(row)
  output=Path(args.output);output.parent.mkdir(parents=True,exist_ok=True);output.write_text("".join(json.dumps(row,ensure_ascii=False,sort_keys=True)+"\n" for row in rows),encoding="utf-8");print(json.dumps({"rows":len(rows),"output":str(output)}))
 

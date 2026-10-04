@@ -11,6 +11,9 @@ baselines:
 generation_seeds: [0, 1, 2, 3]
 bootstrap: {seed: 42, resamples: 10000, unit: sample_after_seed_mean}
 report_datasets_separately: true
+embedding_models:
+  dino: ${DINO_MODEL_ROOT}
+  clip: ${CLIP_MODEL_ROOT}
 selection:
   status: MUST_BE_PREREGISTERED_BEFORE_FORMAL
   threshold_preserve: null

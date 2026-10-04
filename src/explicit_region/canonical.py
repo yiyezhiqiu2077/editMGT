@@ -177,3 +177,23 @@ def verify_record_assets(record: dict[str, Any], roots: dict[str, str | Path]) -
                 f"{prefix} hash mismatch for {record['sample_uid']}: "
                 f"expected={record[f'{prefix}_sha256']} actual={actual}"
             )
+
+
+def load_verified_record_images(record: dict[str, Any], root: str | Path) -> tuple[Image.Image, Image.Image, Image.Image]:
+    """Read each locator once, verify its content identity, then decode it."""
+    validate_record(record)
+    images = []
+    for prefix in ("source", "target", "region"):
+        locator = record[f"{prefix}_locator"]
+        if locator["backend"] == "derived_bbox":
+            value = locator_identity_bytes(locator)
+            image = image_from_locator(locator, root)
+        else:
+            value = read_locator_bytes(locator, root)
+        actual = sha256_bytes(value)
+        if actual != record[f"{prefix}_sha256"]:
+            raise FrozenCorpusIntegrityError(f"{prefix} hash mismatch for {record['sample_uid']}")
+        if locator["backend"] != "derived_bbox":
+            image = Image.open(io.BytesIO(value)).copy()
+        images.append(image)
+    return images[0], images[1], images[2]

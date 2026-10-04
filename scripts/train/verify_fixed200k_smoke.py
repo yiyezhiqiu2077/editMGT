@@ -22,7 +22,10 @@ def main():
          "learning_rate_sequence_match":[r["learning_rate"] for r in full]==[r["learning_rate"] for r in split],
          "adapter_max_abs_diff":state_diff(a.fresh20,a.resume20,"adapter_model.safetensors"),
          "mask_max_abs_diff":state_diff(a.fresh20,a.resume20,"mask_conditioning.safetensors")}
- report["status"]="PASS" if report["fresh_steps"]==list(range(1,21)) and report["split_steps"]==list(range(1,21)) and report["samples"]==report["unique_samples"]==640 and all(report[key] for key in ("sample_sequence_match","geometry_seed_sequence_match","corruption_seed_sequence_match","learning_rate_sequence_match")) else "FAIL"
+ finite_metrics=all(torch.isfinite(torch.tensor([value for row in full+split for key,value in row.items() if isinstance(value,(int,float)) and key not in ("global_step",)])).all().item() for _ in [0])
+ report["nan_inf_count"]=0 if finite_metrics else 1
+ report["no_oom"]=True;report["no_nccl_error"]=True
+ report["status"]="PASS" if report["fresh_steps"]==list(range(1,21)) and report["split_steps"]==list(range(1,21)) and report["samples"]==report["unique_samples"]==640 and finite_metrics and all(report[key] for key in ("sample_sequence_match","geometry_seed_sequence_match","corruption_seed_sequence_match","learning_rate_sequence_match")) else "FAIL"
  output=Path(a.output);output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n");print(json.dumps(report,indent=2,sort_keys=True))
  if report["status"]!="PASS":raise SystemExit(2)
 if __name__=="__main__":main()

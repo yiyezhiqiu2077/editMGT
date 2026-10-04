@@ -1,0 +1,14 @@
+schema_version: formal-schema-contract-v1
+dataset_name: magicbrush
+dataset_revision: 1d8d4629150d18ca50afab66391866f2085be989
+format: huggingface_parquet
+required_columns:
+  img_id: string
+  turn_index: integer
+  instruction: string
+  source_img: image
+  target_img: image
+  mask_img: image
+expected_splits: {train: 8807, dev: 528}
+mask_semantics: edit_region
+mask_polarity: white_is_edit_region

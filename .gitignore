@@ -5,6 +5,7 @@ __pycache__/
 
 # Machine-local assets and caches
 local_assets/
+hf_cache/
 cache/
 derived/
 .cache/
@@ -19,6 +20,9 @@ logs/
 wandb/
 checkpoints/
 results/
+experiments/
+raw_datasets/
+weights/
 *.log
 
 # Model and checkpoint payloads

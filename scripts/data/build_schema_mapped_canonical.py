@@ -13,8 +13,10 @@ import numpy as np
 from PIL import Image
 import yaml
 
-from src.explicit_region.canonical import SCHEMA_VERSION,expected_locator_hash,image_from_locator,sample_uid_for
+from src.explicit_region.canonical import SCHEMA_VERSION,expected_locator_hash,image_from_locator,sample_uid_for,sha256_bytes
+import io
 from src.explicit_region.language import contains_han
+from src.explicit_region.formal_pipeline import load_schema_contract, match_schema_contract, schema_columns
 
 
 def locator(mapping,row,file_relative,row_index,role):
@@ -36,6 +38,7 @@ def iter_rows(root,mapping):
         relative=file.relative_to(root).as_posix()
         if fmt=="parquet":
             import pyarrow.parquet as pq
+            match_schema_contract(mapping, schema_columns(file))
             table=pq.read_table(file)
             for index,row in enumerate(table.to_pylist()):yield relative,index,row
         elif fmt=="jsonl":
@@ -46,21 +49,28 @@ def iter_rows(root,mapping):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--root",required=True);parser.add_argument("--mapping",required=True);parser.add_argument("--edit-type-mapping",required=True);parser.add_argument("--output",required=True)
-    args=parser.parse_args();root=Path(args.root).resolve();mapping=yaml.safe_load(Path(args.mapping).read_text());types=yaml.safe_load(Path(args.edit_type_mapping).read_text())["datasets"]
-    if mapping.get("schema_audit_status")!="REAL_SCHEMA_AUDITED":raise RuntimeError("mapping must bind a REAL_SCHEMA_AUDITED report")
+    args=parser.parse_args();root=Path(args.root).resolve();mapping=load_schema_contract(args.mapping);types=yaml.safe_load(Path(args.edit_type_mapping).read_text())["datasets"]
     name=mapping["dataset_name"];revision=mapping["dataset_revision"]
     if name not in ("crispedit","scaleedit","interedit"):raise ValueError("schema-mapped builder is for audited non-MagicBrush pools")
     if not types.get(name):raise RuntimeError(f"formal edit-type mapping for {name} is empty")
     records=[]
     for file_relative,index,raw in iter_rows(root,mapping):
-        better=mapping.get("better_data_column")
-        if better and not bool(raw.get(better)):continue
+        if any(raw.get(column) != expected for column,expected in mapping.get("eligibility",{}).items()):
+            continue
         instruction=str(raw[mapping["fields"]["instruction"]]).strip()
         original_type=str(raw[mapping["fields"]["edit_type"]])
-        if original_type not in types[name]:raise RuntimeError(f"unmapped {name} edit type: {original_type}")
+        if original_type not in types[name]:raise RuntimeError(f"UNMAPPED_EDIT_TYPE: {name}/{original_type}")
         locators={role:locator(mapping,raw,file_relative,index,role) for role in ("source","target","region")}
-        hashes={role:expected_locator_hash(value,root) for role,value in locators.items()}
-        region=image_from_locator(locators["region"],root).convert("L")
+        hashes={}
+        embedded={}
+        for role,value in locators.items():
+            if value["backend"]=="parquet":
+                cell=raw[value["column"]];cell=cell.get("bytes") if isinstance(cell,dict) else cell
+                if isinstance(cell,memoryview):cell=cell.tobytes()
+                if not isinstance(cell,bytes):raise RuntimeError(f"SCHEMA_CONTRACT_MISMATCH: {role} cell is not bytes")
+                embedded[role]=cell;hashes[role]=sha256_bytes(cell)
+            else:hashes[role]=expected_locator_hash(value,root)
+        region=(Image.open(io.BytesIO(embedded["region"])).copy() if "region" in embedded else image_from_locator(locators["region"],root)).convert("L")
         fraction=float((np.asarray(region)>0).mean())
         group_column=mapping["fields"].get("group_id")
         group=str(raw[group_column]) if group_column else hashes["source"]
