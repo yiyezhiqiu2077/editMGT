@@ -1,47 +1,79 @@
-# D200K 数据契约
+# D200K 数据定义
+
+D200K 是 Explicit-region SFT 使用的固定 200,000 条训练语料。四个来源先转换为统一 canonical record，再进行 selection、去重、翻译和几何检查。
 
 ## Canonical record
 
-每条记录绑定 dataset/revision、稳定 `sample_uid`、source/target/region locator 及 SHA256、原始与英文 instruction、group identity、edit type、mask semantics、region fraction 和 translation identity。支持 file、tar member、parquet cell 与明确 bbox locator；路径不得逃逸 dataset root。
+每行 JSONL 记录一条编辑样本，主要字段包括：
 
-## Schema 与 mask
+| 字段 | 含义 |
+|---|---|
+| `sample_uid` | 由内容生成的稳定样本标识 |
+| `source_locator` | source image 的 file、tar 或 parquet 位置 |
+| `target_locator` | target image 的位置 |
+| `region_locator` | edit mask 或 bbox 的位置 |
+| `instruction_original` | 原始 instruction |
+| `instruction_en` | 英文训练 instruction |
+| `dataset_name` | 数据集名称 |
+| `dataset_revision` | 数据版本 |
+| `group_id` | session / image group，用于 split 隔离 |
+| `edit_type_original` | 原始 edit type |
+| `edit_type_canonical` | 统一 edit type |
+| `mask_semantics` | mask 前景含义 |
 
-四套正式 contract 位于 `configs/data/schema/`。运行时 actual schema 与 committed contract 不一致即 `SCHEMA_CONTRACT_MISMATCH`。CrispEdit 与 ScaleEdit 已使用 pinned revision 的真实 parquet schema/样本核对；其二值 mask 白色/非零区域表示 edit region。未知 edit label 不做隐式兜底，而是 `UNMAPPED_EDIT_TYPE`。
+记录还保存 source、target 和 region 的 SHA256、region fraction、translation 状态与连续 `manifest_index`。
 
-## Selection
+## 数据来源
 
-总量严格为 200,000：MagicBrush 使用全部 eligible train；CrispEdit cap 39,000；ScaleEdit cap 25,000；仅 `better_data=true` 的 Inter-Edit 补齐。selection key 绑定 seed、dataset、revision 和 sample UID。
+| 数据集 | 选择规则 |
+|---|---|
+| MagicBrush train | 使用全部合格样本 |
+| CrispEdit-labeling-39k | 最多 39,000 条 |
+| ScaleEdit-labeling-25k | 最多 25,000 条 |
+| Inter-Edit-Train | 使用 `better_data=true` 的样本补齐余额 |
 
-MagicBrush official DEV 先冻结；每个其他数据集冻结 group-disjoint aux-128。validation 对 source SHA 与 `(dataset, group_id)` 拥有优先权。
+总量固定为 200,000。MagicBrush DEV 与其他数据集的 aux validation 在训练集选择前分离，split 之间保持 group-disjoint。
 
-## 去重与 backfill
+## Mask
 
-同数据集完全重复由确定性顺序保留一条；跨数据集 source duplicate 按固定 dataset priority 解决。Inter-Edit 在 edit type × region-size strata 内选取，reserve 顺序固定。任何 QA rejection 从同 stratum reserve 确定性回填，不足时按提交的 fallback 顺序处理。
+白色或非零像素表示 edit region。bbox 数据先转换为同样的二值区域。
 
-## 翻译
+训练时将 pixel mask 映射到 VQ token grid。`any_overlap` 模式选择与区域相交的 token，也可通过 coverage threshold 和 token dilation 调整。映射后的 ROI 至少包含一个 token。
 
-只翻译被选择的中文 instruction。NLLB contract 固定 `zho_Hans -> eng_Latn`、`do_sample=false`、`num_beams=1`、`max_new_tokens=128`；cache key 绑定模型 commit、语言与 decoding。
+## Selection 与去重
 
-hard QA 包含 `empty_output`、`copy_output`、`han_remaining`、`length_ratio_outlier`、`digit_mismatch`。失败样本 reject/backfill；最终 `instruction_en` 不得含 Han。500 条人工抽样文件只是诊断，不参与 READY。
+选择过程使用固定 seed 和稳定 sample identity，不做 replacement：
 
-## 几何
+1. 先分离 validation group；
+2. 删除同数据集完全重复记录；
+3. 按固定 dataset priority 处理跨数据集 source duplicate；
+4. 在 edit type 与 region-size strata 中选择 Inter-Edit；
+5. 被过滤的记录从对应 reserve 顺序 backfill。
 
-source、target 和 region 在 mask 坐标系预对齐后，共用 deterministic resize/crop/flip。最多八次随机尝试，region retention 至少 0.75；失败时使用 contain/center-pad fallback。最终 region 必须非空且三者尺寸一致。
+相同输入、配置和数据版本会生成相同 manifest。
 
-## Machine QA
+## Translation
 
-`validate_fixed200k_machine.py` 穷举 200K 行并检查 locator、内容 hash、解码、对齐、mask、post-geometry、翻译、Inter-Edit eligibility、train/DEV 泄漏和 TEST 排除。`audit_fixed200k.py` 使用 FP32 VQ 做 finite/containment 审计；NaN/Inf 数必须为零。
+中文 instruction 使用 `facebook/nllb-200-distilled-1.3B`，语言方向为 `zho_Hans → eng_Latn`。解码使用 greedy：`do_sample=false`、`num_beams=1`、`max_new_tokens=128`。
 
-montage 与 translation audit 会保留用于排障，但缺少人工签字不会阻塞 READY。
+翻译 QA 检查：
 
-## READY 语义
+- empty output；
+- 与输入完全相同；
+- 仍包含 Han 字符；
+- 长度比例异常；
+- 数字不一致。
 
-`CORPUS_READY.json` 包含 Git、formal asset identity、selection/config/manifest hash、数量与 unique-source 统计，以及 schema、asset、translation、dedup、geometry、leakage、exact-200K 和 VQ PASS。文件哈希变化后 verifier 必须失败。
+通过检查的结果写入 `instruction_en`。缓存 key 包含模型版本、语言方向、解码配置和输入文本。
 
-`FORMAL_READY.json` 由 8-GPU uninterrupted/resume smoke 生成，绑定 Git、`formal_assets.json`、`CORPUS_READY.json`、smoke report 与 world size 8。
+## Geometry
 
-这两个 marker 都是机器生成的 attestation，不包含 reviewer、human approval 或手工 go/no-go。
+source、target 和 mask 先对齐到 mask 坐标系，然后共享 resize、crop 和 flip 参数。随机 crop 会检查 mask retention；多次尝试仍不满足时使用 contain / center-pad fallback。
+
+几何变换后，三者尺寸一致，edit region 保持非空。mask 使用 nearest-neighbor resize，图像使用对应的连续插值。
 
 ## Determinism
 
-manifest index 在 freeze 后连续且不可变。epoch permutation、DDP rank partition、geometry/corruption seed、translation cache、reserve/backfill 与 resume cursor 都由稳定内容 identity 驱动。坏 frozen row 是 integrity error，不能在训练时换样本。
+训练 manifest 固定后，`manifest_index` 和 `sample_uid` 不再变化。epoch sample order 使用 hash-sort permutation；DDP rank `r` 读取 `permutation[r::world_size]`。
+
+geometry、corruption 和翻译缓存使用稳定 seed。checkpoint 保存 epoch、cursor 和已消费样本数，resume 延续同一 sample sequence。
