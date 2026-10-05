@@ -5,25 +5,34 @@
 ## 目录职责
 
 ```text
-configs/                 冻结资产、schema、数据、训练和评估协议
-src/explicit_region/     可复用的数据/训练/门禁逻辑
+configs/                 冻结资产、schema、SFT/DiMO 训练和评估协议
+configs/dimo/            Region-DiMO CODE PREP 配置
+src/explicit_region/     共享数据契约、几何、SFT 与 formal pipeline primitives
+src/dimo/                teacher/student/auxiliary、distribution matching、one-step editing
 scripts/setup/           空服务器下载、阶段 runner、provenance
 scripts/data/            canonical、D200K、翻译、QA、READY
-scripts/train/           训练、resume、smoke verifier
+scripts/train/           SFT/DiMO 训练、resume、smoke verifier
+scripts/dimo/            selected SFT checkpoint 到 DiMO teacher 的严格注册桥
 scripts/eval/            生成、指标、TEST contract
 scripts/cluster/         8-GPU 编排入口
 scripts/tools/           结果打包等离线工具
-tests/                   行为契约
+tests/dimo/              Region-DiMO correctness contracts
+tests/integration/       统一 SFT/Formal/DiMO 接口契约
+tests/                   其余行为契约
 docs/                    runbook 与设计说明
 ```
 
 依赖方向固定为：
 
 ```text
-configs -> scripts -> src/explicit_region -> released src modules
-              ^              ^
-              └──── tests ───┘
+configs -> scripts -> src/dimo ------┐
+              |          |           v
+              └----> src/explicit_region -> released src modules
+                             ^
+                             └──────── tests
 ```
+
+`src/explicit_region` 是唯一共享数据层，负责 canonical locator、FixedCorpusDataset、mask conversion、deterministic geometry、released component loader、SFT 和 formal gates。`src/dimo` 只负责三角色管理、分布匹配、DiMO checkpoint 与 one-step generation；它直接复用 explicit-region 数据与模型入口，不维护重复 reader。
 
 ## 核心模块
 
@@ -39,6 +48,8 @@ configs -> scripts -> src/explicit_region -> released src modules
 | `corruption.py` / `conditioning.py` | ROI hard lock 与 region embedding |
 | `checkpoint.py` | LoRA、region embedding、optimizer/resume fingerprint |
 | `metrics.py` | masked pixel/LPIPS、DINO/CLIP、finite aggregation |
+
+Region-DiMO 的核心模块位于 `src/dimo/`：`roles.py` 管理共享 base 上互斥的 teacher/student/auxiliary 状态，`step.py` 和 `surrogate.py` 实现 FP32 distribution-matching 更新，`checkpoint.py` 管理完整 step/resume，`contracts.py` 保持 formal gate fail-closed。`scripts/dimo/register_teacher.py` 验证 `SELECTED_CHECKPOINT.json`、formal assets、checkpoint 文件哈希、Git 和 released model identity，再原子生成 `dimo_teacher_manifest.json`。
 
 ## Formal prepare
 

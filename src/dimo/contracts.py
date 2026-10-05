@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -39,6 +40,29 @@ REQUIRED_TEACHER_FIELDS = {
     "selected_checkpoint_identity",
     "formal_teacher",
 }
+
+
+def released_base_model_identity(identity: dict[str, Any]) -> dict[str, Any]:
+    """Use the same portable identity for registration, training, and inference.
+
+    Prep-only snapshots created before the formal asset pipeline may not have a
+    pinned revision. They retain the complete component report so the existing
+    preparation workflow remains content-bound.
+    """
+    repo_id = identity.get("repo_id")
+    revision = identity.get("resolved_revision")
+    if not isinstance(repo_id, str) or not isinstance(revision, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", revision
+    ):
+        return identity
+    components = {}
+    for name, record in sorted(identity.get("components", {}).items()):
+        if isinstance(record, dict) and isinstance(record.get("config_sha256"), str):
+            components[name] = record["config_sha256"]
+    result: dict[str, Any] = {"repo_id": repo_id, "resolved_revision": revision}
+    if components:
+        result["components"] = components
+    return result
 
 
 @dataclass(frozen=True)
@@ -128,6 +152,18 @@ def load_teacher_contract(
     bundle = teacher_bundle_fingerprint(
         root, base_model_identity=manifest["base_model_identity"], formal=True
     )
+    manifest_hash_fields = {
+        "lora_state": "adapter_sha256",
+        "edit_region_embedding_state": "mask_conditioning_sha256",
+        "training_config_identity": "trainable_config_sha256",
+        "fingerprint": "fingerprint_sha256",
+    }
+    for manifest_field, bundle_field in manifest_hash_fields.items():
+        value = manifest.get(manifest_field)
+        if not isinstance(value, dict) or value.get("sha256") != bundle[bundle_field]:
+            raise RuntimeError(
+                f"teacher checkpoint contract identity mismatch: {manifest_field}"
+            )
     return TeacherCheckpointContract(root, manifest, bundle["bundle_sha256"])
 
 

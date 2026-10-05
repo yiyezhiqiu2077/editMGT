@@ -150,13 +150,39 @@ correctness contracts:
 than one, that one invocation uses a batched unconditional/conditional input of
 size `2B`; metadata records `effective_cfg_batch_multiplier=2`.
 
-### Formal teacher selection (pending)
+## Formal teacher handoff
 
-The allowed future transition is:
+唯一允许的正式 teacher 交接链为：
 
-`E1/E2/E3/E4 -> MagicBrush DEV -> pre-registered checkpoint selector ->`
-`selected dense explicit-region teacher -> DIMO_TEACHER_CHECKPOINT -> formal`
-`Region-DiMO experiments`.
+```text
+E1/E2/E3/E4
+→ MagicBrush DEV pre-registered selector
+→ scripts/eval/register_selected_checkpoint.py
+→ SELECTED_CHECKPOINT.json
+→ scripts/dimo/register_teacher.py
+→ dimo_teacher_manifest.json
+→ DIMO_TEACHER_CHECKPOINT
+```
+
+注册命令：
+
+```bash
+source "$ASSET_ROOT/artifacts/formal_env.sh"
+
+uv run python scripts/dimo/register_teacher.py \
+  --selected-checkpoint "$CANDIDATE_CHECKPOINT" \
+  --selected-checkpoint-record "$ASSET_ROOT/artifacts/SELECTED_CHECKPOINT.json" \
+  --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" \
+  --output-dir "$ASSET_ROOT/models/dimo_teacher"
+
+export DIMO_TEACHER_CHECKPOINT="$ASSET_ROOT/models/dimo_teacher"
+```
+
+注册器不信任输入路径：它重新计算 adapter、region embedding、trainable config 和 fingerprint 的 SHA256，核对 selected-checkpoint identity、formal-assets hash、formal Git SHA，并规范化比较 checkpoint 与 formal ledger 中的 `repo_id` 和 40 位 `resolved_revision`。bundle 在同一文件系统的临时目录完成两次 contract 验证后原子 rename；相同 bundle 可幂等重放，不同的既有目录会 fail closed。
+
+Formal teacher registration 只证明 handoff provenance 完整，不代表 Region-DiMO 已允许正式训练。`DIMO_EDIT_FORMAL_READY` 和配置中的 `formal_ready` 仍保持 false；本 milestone 不存在绕过参数。
+
+### Formal teacher selection status
 
 Current values are:
 

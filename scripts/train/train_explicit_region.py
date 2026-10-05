@@ -154,9 +154,18 @@ def fingerprint_payload(config: dict, identity: dict) -> dict:
     collect(config.get("data", {}), "data")
     collect(config.get("validation", {}), "validation")
     repo = repository_identity()
+    model_identity = {
+        "repo_id": identity.get("repo_id"),
+        "resolved_revision": identity.get("resolved_revision"),
+        "components": {
+            name: {"config_sha256": value["config_sha256"]}
+            for name, value in sorted(identity.get("components", {}).items())
+        },
+    }
     return {
         "schema": "explicit-region-sft-v1",
         "model_snapshot": identity["snapshot_identity"],
+        "model_identity": model_identity,
         "data": config["data"],
         "data_content_hashes": paths,
         "validation": config.get("validation", {"enabled": False}),

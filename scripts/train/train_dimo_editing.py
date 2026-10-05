@@ -29,7 +29,8 @@ from src.dataset_utils import encode_prompt, tokenize_prompt
 from src.dimo.checkpoint import config_hash, load_dimo_checkpoint, save_dimo_checkpoint
 from src.dimo.contracts import (
     DIMO_UPSTREAM_COMMIT, build_inference_fingerprint, enforce_run_guard,
-    load_teacher_contract, resolve_teacher_checkpoint, teacher_bundle_fingerprint,
+    load_teacher_contract, released_base_model_identity, resolve_teacher_checkpoint,
+    teacher_bundle_fingerprint,
 )
 from src.dimo.ema import TrainableEMA
 from src.dimo.diagnostics import run_nonzero_signal_diagnostic
@@ -202,6 +203,11 @@ def main() -> None:
         config["model"]["repo_or_root"], torch_dtype=dtype, vq_dtype=torch.float32,
         identity_output=output / "component_identity.json",
     )
+    base_model_identity = released_base_model_identity(components.identity)
+    if contract is not None:
+        contract = load_teacher_contract(
+            teacher_path, expected_base_identity=base_model_identity
+        )
     roles = initialize_shared_model_roles(
         components.transformer, teacher_path, model_roles=config["model_roles"]
     )
@@ -241,14 +247,14 @@ def main() -> None:
         output / "dimo_trainable_parameter_report.json",
     )
     teacher_bundle = teacher_bundle_fingerprint(
-        teacher_path, base_model_identity=components.identity, formal=False
+        teacher_path, base_model_identity=base_model_identity, formal=False
     )
     (output / "teacher_bundle_fingerprint.json").write_text(
         json.dumps(teacher_bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     inference_identity = build_inference_fingerprint(
         teacher_bundle_sha256=teacher_bundle["bundle_sha256"],
-        base_model_identity=components.identity,
+        base_model_identity=base_model_identity,
         model_roles=config["model_roles"],
         upstream_commit=DIMO_UPSTREAM_COMMIT,
     )

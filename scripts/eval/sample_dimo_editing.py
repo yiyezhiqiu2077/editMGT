@@ -20,7 +20,7 @@ from src.dataset_utils import encode_prompt, tokenize_prompt
 from src.dimo.checkpoint import validate_inference_checkpoint
 from src.dimo.contracts import (
     DIMO_MODEL_ROLES_V11, DIMO_UPSTREAM_COMMIT, build_inference_fingerprint,
-    teacher_bundle_fingerprint,
+    released_base_model_identity, teacher_bundle_fingerprint,
 )
 from src.dimo.ema import apply_ema_to_student_role
 from src.dimo.initialization import initialize_shared_model_roles
@@ -65,12 +65,13 @@ def main() -> None:
     components = load_released_components(
         args.model_root, torch_dtype=torch.bfloat16, vq_dtype=torch.float32
     )
+    base_model_identity = released_base_model_identity(components.identity)
     teacher_bundle = teacher_bundle_fingerprint(
-        args.teacher_checkpoint, base_model_identity=components.identity, formal=False
+        args.teacher_checkpoint, base_model_identity=base_model_identity, formal=False
     )
     inference_identity = build_inference_fingerprint(
         teacher_bundle_sha256=teacher_bundle["bundle_sha256"],
-        base_model_identity=components.identity,
+        base_model_identity=base_model_identity,
         model_roles=DIMO_MODEL_ROLES_V11,
         upstream_commit=DIMO_UPSTREAM_COMMIT,
     )

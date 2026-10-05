@@ -9,7 +9,6 @@ from torch.utils.data import Dataset
 
 from .canonical import (
     FrozenCorpusIntegrityError, image_from_locator, load_verified_record_images, validate_record,
-    verify_record_assets,
 )
 from .dataset import _align_to_mask_coordinates
 from .deterministic import stable_seed

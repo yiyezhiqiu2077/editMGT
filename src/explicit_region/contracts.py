@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Iterable
 
 
@@ -30,7 +31,22 @@ def audit_component_identity(model_root: str | Path, output_path: str | Path | N
     root = Path(model_root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"model root not found: {root}")
-    snapshot_identity = root.name if root.parent.name == "snapshots" else sha256_file(root / "editmgt" / "config.json")
+    asset_marker = root / "asset_identity.json"
+    asset_identity = json.loads(asset_marker.read_text(encoding="utf-8")) if asset_marker.is_file() else {}
+    resolved_revision = asset_identity.get("resolved_revision")
+    if resolved_revision is None and root.parent.name == "snapshots" and re.fullmatch(
+        r"[0-9a-f]{40}", root.name
+    ):
+        resolved_revision = root.name
+    if resolved_revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(resolved_revision)):
+        raise RuntimeError("released model asset_identity.json has an invalid resolved_revision")
+    repo_id = asset_identity.get("repo_id", "WeiChow/EditMGT")
+    snapshot_identity = (
+        str(resolved_revision)
+        if resolved_revision is not None
+        else root.name if root.parent.name == "snapshots"
+        else sha256_file(root / "editmgt" / "config.json")
+    )
     components = {}
     for name, (subfolder, marker) in COMPONENT_FILES.items():
         folder = (root / subfolder).resolve()
@@ -43,13 +59,19 @@ def audit_component_identity(model_root: str | Path, output_path: str | Path | N
             raise FileNotFoundError(f"missing {name} marker: {marker_path}")
         components[name] = {
             "resolved_path": str(folder),
-            "repo_identity": "WeiChow/EditMGT",
+            "repo_identity": repo_id,
             "revision_or_snapshot": snapshot_identity,
             "subfolder": subfolder,
             "config_sha256": sha256_file(marker_path),
             "local_files_only": True,
         }
-    report = {"model_root": str(root), "snapshot_identity": snapshot_identity, "components": components}
+    report = {
+        "model_root": str(root),
+        "repo_id": repo_id,
+        "resolved_revision": resolved_revision,
+        "snapshot_identity": snapshot_identity,
+        "components": components,
+    }
     if output_path is not None:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
