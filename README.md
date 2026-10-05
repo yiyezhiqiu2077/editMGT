@@ -103,6 +103,20 @@ bash scripts/eval/run_magicbrush_test.sh --run
 
 TEST launcher 硬验证 pinned test identity、535 sessions / 1053 turns、checkpoint、Git 与 provenance。结果可用 `scripts/tools/package_formal_results.py` 打包；默认排除数据、权重、cache 与全分辨率图像。
 
+## Region-DiMO
+
+Region-DiMO 是 explicit-region SFT 之后的第二阶段蒸馏方向：
+
+```text
+Explicit-region SFT
+→ E1–E4
+→ DEV-only checkpoint selection
+→ selected dense teacher
+→ Region-DiMO
+```
+
+当前仅完成 CODE PREP 与 one-step inference 链路，`SELECTED_DIMO_TEACHER = NONE`，`DIMO_EDIT_FORMAL_READY = false`。正式 teacher 必须经 `SELECTED_CHECKPOINT.json` 和 `scripts/dimo/register_teacher.py` 注册；注册成功也不代表允许正式 DiMO long run。详细设计见 [Region-DiMO 移植说明](docs/DIMO_PORTING.md)。
+
 ## 验证
 
 ```bash

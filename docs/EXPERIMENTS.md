@@ -150,3 +150,32 @@ git diff --check
 ```
 
 代码完成不等于实验完成。若没有真实 `CORPUS_READY.json` 和 `FORMAL_READY.json`，正式训练仍是 NOT RUN。
+
+## Region-DiMO
+
+Region-DiMO 是 E1–E4 之后的候选第二阶段，目前仅为 CODE PREP，不是正式实验。完整 handoff 顺序为：
+
+```text
+E1–E4
+→ 使用预注册规则在 MagicBrush DEV 上选择唯一 candidate
+→ scripts/eval/register_selected_checkpoint.py
+→ SELECTED_CHECKPOINT.json
+→ scripts/dimo/register_teacher.py
+→ dimo_teacher_manifest.json
+→ DIMO_TEACHER_CHECKPOINT
+→ future Region-DiMO
+```
+
+teacher 注册示例：
+
+```bash
+uv run python scripts/dimo/register_teacher.py \
+  --selected-checkpoint "$CANDIDATE_CHECKPOINT" \
+  --selected-checkpoint-record "$ASSET_ROOT/artifacts/SELECTED_CHECKPOINT.json" \
+  --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" \
+  --output-dir "$ASSET_ROOT/models/dimo_teacher"
+
+export DIMO_TEACHER_CHECKPOINT="$ASSET_ROOT/models/dimo_teacher"
+```
+
+注册器会重新验证 checkpoint 文件、selection record、formal assets、Git 与 released EditMGT identity，并原子生成 teacher bundle。teacher registration 不等于 formal DiMO ready；当前必须保持 `SELECTED_DIMO_TEACHER=NONE`、`DIMO_EDIT_FORMAL_READY=false`，不得启动正式 DiMO long run。算法、role 管理、one-step inference 与后续门禁详见 [DIMO_PORTING.md](DIMO_PORTING.md)。
