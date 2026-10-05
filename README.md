@@ -173,6 +173,3 @@ git diff --check
 - [Region-DiMO](docs/DIMO_PORTING.md)
 - [环境配置](docs/ENVIRONMENT.md)
 
-## 上游与许可证
-
-本仓库基于官方 [EditMGT](https://github.com/weichow23/editmgt) 项目进行研究开发，上游 [CC-BY-4.0 许可证](LICENSE)保持不变。
