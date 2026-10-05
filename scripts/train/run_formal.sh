@@ -13,7 +13,11 @@ if [[ "$mode" == "--print-command" ]]; then
   printf '\n'
 else
   if [[ "${CONFIRM_FORMAL_RUN:-}" != "YES" ]]; then echo "CONFIRM_FORMAL_RUN=YES required" >&2; exit 3; fi
-  : "${DERIVED_ROOT:?DERIVED_ROOT required}"
-  uv run python scripts/data/verify_corpus_ready.py "$DERIVED_ROOT/fixed200k/CORPUS_READY.json"
+  : "${ASSET_ROOT:?ASSET_ROOT required}" "${DERIVED_ROOT:?DERIVED_ROOT required}"
+  if [[ "$(basename "$config")" == cluster_8g_smoke*.yaml ]]; then
+    uv run python scripts/setup/verify_formal_pipeline.py --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" --corpus-ready "$DERIVED_ROOT/fixed200k/CORPUS_READY.json" --pre-smoke
+  else
+    uv run python scripts/setup/verify_formal_pipeline.py --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" --corpus-ready "$DERIVED_ROOT/fixed200k/CORPUS_READY.json" --formal-ready "$ASSET_ROOT/artifacts/FORMAL_READY.json" --selection-config configs/eval/formal.yaml
+  fi
   "${cmd[@]}"
 fi

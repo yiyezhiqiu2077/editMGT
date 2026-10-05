@@ -1,0 +1,11 @@
+schema_version: formal-schema-contract-v1
+dataset_name: interedit
+dataset_revision: b319d9fdb45cc670ec263fe4aeaa962f1623d5dc
+format: jsonl_gzip_plus_tar
+required_fields: [sample_id, source_id, edit_type, instruction, better_data,
+  bounding_box, bbox_reference_dimensions, source_archive, source_file,
+  asset_archive, target_file, mask_file]
+known_edit_types: [Add, Remove, Local, Texture]
+eligibility: {better_data: true}
+mask_semantics: user_guidance_region
+mask_polarity: nonzero_is_edit_region

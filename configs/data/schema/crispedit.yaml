@@ -1,0 +1,41 @@
+schema_version: formal-schema-contract-v1
+dataset_name: crispedit
+dataset_revision: dcbd1c952e93e4361ad862b33f3acd1cc74bec5a
+format: parquet
+files_glob: shards/**/*.parquet
+required_columns:
+  source_shard: string
+  row_idx: int64
+  input_img: struct
+  instruction: string
+  output_img: struct
+  type: string
+  quality__prefilter_verdict: string
+  quality__filter_decision: string
+  scene__scene_decision: string
+  scene__scene_pass: bool
+  grounding__grounding_status: string
+  grounding__qc_flag: string
+  mask__mask_png: binary
+  mask__qc_flag: string
+  mask__mask_selection_reason: string
+fields:
+  source: {storage: embedded_parquet, column: input_img}
+  target: {storage: embedded_parquet, column: output_img}
+  region: {storage: embedded_parquet, column: mask__mask_png}
+  instruction: instruction
+  edit_type: type
+  group_id: null
+eligibility:
+  quality__prefilter_verdict: PASS
+  quality__filter_decision: keep
+  scene__scene_decision: PASS
+  scene__scene_pass: true
+  grounding__grounding_status: OK
+  grounding__qc_flag: OK
+  mask__qc_flag: OK
+  mask__mask_selection_reason: SELECTED
+known_edit_types: [add, color, motion change, remove, replace]
+mask_semantics: edit_region
+mask_polarity: white_is_edit_region
+verification: sampled_real_rows_at_pinned_revision

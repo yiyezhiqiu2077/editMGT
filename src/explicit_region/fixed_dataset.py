@@ -8,7 +8,7 @@ from pathlib import Path
 from torch.utils.data import Dataset
 
 from .canonical import (
-    FrozenCorpusIntegrityError, image_from_locator, validate_record,
+    FrozenCorpusIntegrityError, image_from_locator, load_verified_record_images, validate_record,
     verify_record_assets,
 )
 from .dataset import _align_to_mask_coordinates
@@ -59,12 +59,13 @@ class CanonicalAlignedDataset(Dataset):
         row = self.rows[index]
         try:
             if self.verify_hashes:
-                verify_record_assets(row, {row["dataset_name"]: self.root})
+                source, target, mask = load_verified_record_images(row, self.root)
             if not row["instruction_en"] or contains_han(row["instruction_en"]):
                 raise FrozenCorpusIntegrityError("invalid frozen instruction_en")
-            source = image_from_locator(row["source_locator"], self.root)
-            target = image_from_locator(row["target_locator"], self.root)
-            mask = image_from_locator(row["region_locator"], self.root)
+            if not self.verify_hashes:
+                source = image_from_locator(row["source_locator"], self.root)
+                target = image_from_locator(row["target_locator"], self.root)
+                mask = image_from_locator(row["region_locator"], self.root)
             source, target, prealignment = _align_to_mask_coordinates(
                 source, target, mask, row["sample_uid"]
             )

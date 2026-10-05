@@ -231,7 +231,7 @@ def write_corpus_ready(
 ) -> dict:
     hashes = {name: sha256_file(value) for name, value in sorted(files.items())}
     payload = {
-        "status": "READY", "schema_version": "fixed200k-ready-v2",
+        "status": "READY", "schema_version": metadata.get("schema_version", "fixed200k-ready-v2"),
         "files": {name: {"path": str(Path(value).resolve()), "sha256": hashes[name]}
                   for name, value in sorted(files.items())},
         **metadata,
@@ -246,10 +246,24 @@ def verify_corpus_ready(path: str | Path) -> dict:
     payload = json.loads(marker.read_text(encoding="utf-8"))
     if payload.get("status") != "READY":
         raise RuntimeError("CORPUS_NOT_READY: marker status is not READY")
+    if payload.get("schema_version") == "fixed200k-ready-v3":
+        required = ("git_sha", "formal_assets_sha256", "selection_config_sha256",
+                    "train_manifest_sha256", "total_rows", "dataset_counts",
+                    "unique_source_counts", "schema_contract", "asset_integrity",
+                    "translation", "dedup", "geometry", "train_dev_leakage",
+                    "exact_200k", "vq_audit")
+        missing = [key for key in required if key not in payload]
+        failed = [key for key in required[7:] if payload.get(key) != "PASS"]
+        if missing or failed or payload.get("total_rows") != 200000:
+            raise RuntimeError(f"CORPUS_NOT_READY: machine contract missing={missing} failed={failed}")
     for name, record in payload.get("files", {}).items():
         target = Path(record["path"])
         if not target.is_file() or sha256_file(target) != record["sha256"]:
             raise RuntimeError(f"CORPUS_NOT_READY: hash mismatch for {name}")
+    if payload.get("schema_version") == "fixed200k-ready-v3":
+        train = payload.get("files", {}).get("train_200k", {})
+        if payload.get("train_manifest_sha256") != train.get("sha256"):
+            raise RuntimeError("CORPUS_NOT_READY: train manifest identity mismatch")
     return payload
 
 

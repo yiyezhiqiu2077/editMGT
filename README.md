@@ -1,206 +1,124 @@
-# EditMGT Explicit-Region Editing Experiments
+# EditMGT 显式区域编辑 SFT
 
-本仓库用于在 EditMGT 上进行带 provided region / explicit mask 的图像编辑实验，当前支持固定 200K mixed corpus 的构建流程、ROI hard-lock corruption、edit-region conditioning、LoRA 微调、DDP、确定性 resume 和 GT-mask 评测。
+本仓库基于已发布的 [EditMGT](https://github.com/weichow23/editmgt)，提供 explicit-mask / provided-region 图像编辑 SFT 的可复现实验工程。目标是让一台空服务器从 pinned public assets 自动得到 exact D200K、机器 READY 门禁、8-GPU smoke 和正式 E1–E4 入口。
 
-第一阶段目标是建立稳定的 mask-aware SFT baseline；后续将在得到的 dense checkpoint 上继续研究 dense、cache、sparse 和 shortcut 等生成加速方向。
+代码与文档完成不代表实验完成；除非服务器真实生成 `CORPUS_READY.json` 与 `FORMAL_READY.json`，D200K、8-GPU smoke、LR probes、E1–E4 和 final TEST 都仍是 NOT RUN。
 
-完整实验流程见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
+## 当前状态
 
-## 项目结构
+| 项目 | 状态 |
+|---|---|
+| Formal Pipeline v3 工程 | 已实现，待完整资产/集群实跑 |
+| Public asset immutable manifest | 已提交 |
+| CrispEdit/ScaleEdit schema 与 mask polarity | pinned metadata + 真实 shard 样本已核验 |
+| 完整 public assets 下载 | NOT RUN |
+| exact D200K 构建 | NOT RUN |
+| 8-GPU smoke / resume | NOT RUN |
+| LR probes / E1–E4 / TEST | NOT RUN |
 
-```text
-editMGT/
-├── configs/
-│   ├── cluster/
-│   ├── data/
-│   ├── eval/
-│   ├── train/
-│   └── translation/
-├── docs/
-├── scripts/
-│   ├── cluster/
-│   ├── data/
-│   ├── eval/
-│   ├── setup/
-│   └── train/
-├── src/
-│   └── explicit_region/
-├── tests/
-├── train/
-├── pyproject.toml
-└── uv.lock
-```
-
-正式 explicit-region 训练入口为 [`scripts/train/train_explicit_region.py`](scripts/train/train_explicit_region.py)。保留的上游 `train/train.py` 不作为本实验的正式训练入口。
-
-详细结构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
-
-## 环境安装
-
-环境固定使用 Python `>=3.10,<3.11`、PyTorch 2.1.2（CUDA 12.1 wheel）、Diffusers 0.32.1、Transformers 4.47.1 和 PEFT 0.14.0。
+## 快速入口
 
 ```bash
 git clone git@github.com:yiyezhiqiu2077/editMGT.git
 cd editMGT
+git checkout <formal-sha>
 
-uv sync --frozen --group dev --group translation --group metrics
+export ASSET_ROOT=/large_disk/editmgt_assets
+export HF_HOME=/large_disk/editmgt_hf_cache   # 可选
 
-uv run python - <<'PY'
-import torch
-print(torch.__version__)
-print(torch.version.cuda)
-print(torch.cuda.is_available())
-PY
-```
-详细环境配置见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
-
-## 模型与数据
-
-模型、原始数据、翻译模型、checkpoint、缓存和实验输出均不提交到仓库，通过环境变量指定本地路径：
-
-```text
-EDITMGT_MODEL_ROOT
-MAGICBRUSH_ROOT
-MAGICBRUSH_DEV_ROOT
-CRISPEDIT_ROOT
-SCALEEDIT_ROOT
-INTEREDIT_ROOT
-TRANSLATOR_MODEL_ROOT
-DERIVED_ROOT
-EDITMGT_OUTPUT_ROOT
+bash scripts/setup/run_formal_prepare.sh --dry-run
+bash scripts/setup/run_formal_prepare.sh --run
 ```
 
-计划使用固定的 `D200K-v2` 训练语料，总计 200,000 条记录，数据来源和选择策略为：
+prepare 会自动安装 locked 环境，下载 EditMGT、NLLB、四套训练数据、MagicBrush DEV/TEST 与评测模型，验证 schema，构建/翻译/去重 D200K，完成内容、几何和 VQ QA，并生成 `$ASSET_ROOT/artifacts/formal_assets.json` 与 `CORPUS_READY.json`。运行中不要求手填 mapping 或人工审批。
 
-| 数据来源 | 选择策略 |
-| --- | --- |
-| MagicBrush official train | 使用全部合格记录 |
-| CrispEdit-labeling-39k | 最多 39,000 条 |
-| ScaleEdit-labeling-25k | 最多 25,000 条 |
-| Inter-Edit-Train | 经过质量筛选后补齐至 200,000 条 |
-
-这些数值是选择策略和上限；实际数据集占比以冻结后的 manifest 为准。
-
-数据准备流程为 raw datasets → schema audit → canonicalization → translation → deduplication / filtering → fixed D200K-v2 manifest → `CORPUS_READY.json`。
-
-
-| 项目 | 值 |
-| --- | --- |
-| GPU | 8 |
-| Batch / GPU | 1 |
-| Gradient Accumulation | 4 |
-| Global Batch | 32 |
-| Samples / Epoch | 200,000 |
-| Steps / Epoch | 6,250 |
-
-详细数据准备和审计流程见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
-
-## Explicit-Region Training
-
-当前训练实现支持：
-
-- source / target / region shared geometry preprocessing
-- pixel region → VQ token region mapping
-- ROI hard-lock corruption
-- masked-subset generation loss
-- persistent edit-region embedding
-- ROI-relative inference timestep
-- target / reference LoRA scope control
-- content-bound fingerprint
-- optimizer-boundary deterministic resume
-
-其中 `edit_region_hardlock` 模式只对 ROI 内选中的 target token subset 进行 corruption，并在该 subset 上计算 generation loss；ROI 外 token 保持锁定。
-
-## 正式实验
-
-正式实验包括两个 released-model baseline 和四组 SFT：
-
-| Experiment | Corruption / Mask Condition | LoRA Scope |
-| --- | --- | --- |
-| E0-official | released model + upstream timestep | released weights |
-| E0-region | released model + ROI-relative timestep | released weights |
-| E1 | `full_target`, mask condition OFF | both |
-| E2 | `edit_region_hardlock`, mask condition OFF | both |
-| E3 | `edit_region_hardlock`, mask condition ON | both |
-| E4 | `edit_region_hardlock`, mask condition ON | reference only |
-
-E1–E4 使用相同的 D200K-v2 corpus、training permutation、global batch、training budget 和 primary validation protocol，主要用于比较 ROI hard-lock、explicit region conditioning 和 LoRA scope 的影响。
-
-正式实验前进行 `1e-5 / 3e-5 / 5e-5` learning-rate probes。
-
-## 训练
-
-固定语料准备：
+## 8-GPU 与正式实验
 
 ```bash
-bash scripts/cluster/prepare_fixed_200k_v2.sh --print-command
-bash scripts/cluster/prepare_fixed_200k_v2.sh --run
-```
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CONFIRM_FORMAL_RUN=YES
 
-8-GPU uninterrupted / resume smoke：
-
-```bash
-bash scripts/cluster/run_8g_smoke.sh --print-command
 bash scripts/cluster/run_8g_smoke.sh --run
-```
-
-Learning-rate probes：
-
-```bash
-bash scripts/cluster/run_lr_probes.sh --print-command
 bash scripts/cluster/run_lr_probes.sh --run
-```
-
-E1–E4 正式训练：
-
-```bash
-bash scripts/cluster/run_e1_e4.sh --print-command
 bash scripts/cluster/run_e1_e4.sh --run
 ```
 
-Launcher 默认只打印命令。运行前检查 `--print-command` 输出，满足对应 corpus、asset 和 experiment gate，并设置 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 规定的显式确认变量后，再使用 `--run` 执行。
+正式 launcher 验证 `formal_assets.json`、`CORPUS_READY.json`、`FORMAL_READY.json`、Git SHA 和 selection config。当前 selection 阈值故意未冻结，因此 LR/E1–E4 会报 `SELECTION_RULE_NOT_PREREGISTERED`；不要根据已看结果临时补阈值。
 
-## 分布式训练
+完整命令见 [实验 runbook](docs/EXPERIMENTS.md)。
 
-正式训练 topology 为 `1 node × 8 GPUs`。
+## D200K
 
-数据加载和训练采用 PyTorch distributed training，并使用固定的无放回 epoch permutation + rank-stride partition 保证各 rank 数据划分确定。
+固定语料恰好 200,000 条：
 
-Resume 在 optimizer boundary 上恢复，并检查 corpus / model fingerprint。
+- MagicBrush official train：全部 eligible 记录；
+- CrispEdit-labeling-39k：最多 39,000；
+- ScaleEdit-labeling-25k：最多 25,000；
+- Inter-Edit：仅 `better_data=true`，补齐余额。
 
-## 评测
+语料使用内容寻址 locator、确定性 selection/dedup/translation backfill、无放回 hash-sort epoch permutation 和 rank-stride DDP。MagicBrush DEV 与三套 aux validation 先冻结，TEST 永不参与 corpus 或 checkpoint selection。详细定义见 [数据契约](docs/DATA_CONTRACT.md)。
 
-MagicBrush official DEV 为 primary validation set；MagicBrush official TEST 为 final test set，不参与 learning-rate selection、checkpoint selection 或其他超参数调节。
+## 实验定义
 
-正式 evaluator 为 [`scripts/eval/formal_eval.py`](scripts/eval/formal_eval.py)。
+| 实验 | Corruption / region condition | LoRA scope |
+|---|---|---|
+| E0-official | released model / official timestep | released weights |
+| E0-region | released model / ROI-relative timestep | released weights |
+| E1 | full target / OFF | both |
+| E2 | ROI hard lock / OFF | both |
+| E3 | ROI hard lock / ON | both |
+| E4 | ROI hard lock / ON | reference only |
 
-当前主要指标和诊断包括：
+E1–E4 共享 exact D200K、permutation、seed、训练预算和 validation protocol。本轮 pipeline 工程不改变训练语义。
 
-- Inside / Outside L1
-- PSNR / SSIM
-- Feature-space masked LPIPS
-- Full-image LPIPS-to-target
-- 可选的 DINO-I target / source similarity
-- 可选的 CLIP-I target / source similarity
-- No-op 原始诊断
-- Runtime
+## 项目结构
 
-正式评测同时记录 multi-seed sample mean、standard error 和 sample-level bootstrap confidence interval。
+```text
+configs/                 formal assets、schema、data/train/eval contracts
+src/explicit_region/     canonical、geometry、selection、sampler、训练与门禁
+scripts/setup/           空服务器下载与 00–12 prepare
+scripts/data/            D200K、翻译、QA、CORPUS_READY
+scripts/train/           训练、resume 与 smoke verifier
+scripts/eval/            validation、正式 TEST 与指标
+scripts/cluster/         8-GPU 编排入口
+scripts/tools/           结果打包
+tests/                   行为契约
+docs/                    中文 runbook 与设计文档
+```
 
-DINO / CLIP evaluator 使用显式配置的本地模型权重，不自动下载模型。
+正式训练入口是 `scripts/train/train_explicit_region.py`，不是保留的上游 `train/train.py`。详见 [代码架构](docs/ARCHITECTURE.md)。
 
-详细评测协议见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
-。
+## Final TEST 与结果包
 
-## 测试
+selection rule 和唯一 checkpoint 冻结后：
+
+```bash
+export CANDIDATE_CHECKPOINT=$ASSET_ROOT/experiments/<run>/checkpoint-6250
+uv run python scripts/eval/register_selected_checkpoint.py \
+  --checkpoint "$CANDIDATE_CHECKPOINT" \
+  --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" \
+  --output "$ASSET_ROOT/artifacts/SELECTED_CHECKPOINT.json"
+bash scripts/eval/run_magicbrush_test.sh --run
+```
+
+TEST launcher 硬验证 pinned test identity、535 sessions / 1053 turns、checkpoint、Git 与 provenance。结果可用 `scripts/tools/package_formal_results.py` 打包；默认排除数据、权重、cache 与全分辨率图像。
+
+## 验证
 
 ```bash
 uv run pytest -q
 uv run python -m compileall src scripts tests
+bash -n scripts/setup/run_formal_prepare.sh scripts/cluster/*.sh scripts/train/*.sh scripts/eval/*.sh
+git diff --check
 ```
 
 ## 文档
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)
-- [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
+- [实验流程](docs/EXPERIMENTS.md)
+- [环境与资产](docs/ENVIRONMENT.md)
+- [数据契约](docs/DATA_CONTRACT.md)
+- [代码架构](docs/ARCHITECTURE.md)
+
+## 上游与许可证
+
+本仓库衍生自官方 EditMGT 项目，是独立实验工程，不代表原论文作者。上游 [CC-BY-4.0 许可证](LICENSE)保持不变。

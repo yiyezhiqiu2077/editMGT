@@ -1,0 +1,100 @@
+schema_version: editmgt-formal-assets-v3
+identity_policy: immutable_huggingface_commit
+assets:
+  editmgt:
+    name: EditMGT released model
+    provider: huggingface
+    repo_type: model
+    repo_id: WeiChow/EditMGT
+    revision: 0a00f14ea159728fb76ac99ed741f9deca5fee28
+    identity_policy: exact_commit
+    local_subdir: models/editmgt
+    expected_structure: [editmgt, text_encoder, tokenizer, llm_encoder, vqvae, scheduler]
+  nllb:
+    name: NLLB translator
+    provider: huggingface
+    repo_type: model
+    repo_id: facebook/nllb-200-distilled-1.3B
+    revision: 7be3e24664b38ce1cac29b8aeed6911aa0cf0576
+    identity_policy: exact_commit
+    local_subdir: models/nllb
+    expected_structure: [config.json, tokenizer_config.json]
+  magicbrush:
+    name: MagicBrush TRAIN and DEV
+    provider: huggingface
+    repo_type: dataset
+    repo_id: osunlp/MagicBrush
+    revision: 1d8d4629150d18ca50afab66391866f2085be989
+    identity_policy: exact_commit
+    local_subdir: datasets/magicbrush/snapshot
+    allow_patterns: ['*.parquet', '**/*.parquet', README.md]
+    expected_structure: [README.md]
+    expected_splits: {train: 8807, dev: 528}
+  magicbrush_test:
+    name: MagicBrush official TEST contract mirror
+    provider: huggingface
+    repo_type: dataset
+    repo_id: akshayg08/MagicBrushTest
+    revision: 8c8eb2cfeac96f635ed83512c60c3502b06e00c2
+    identity_policy: exact_commit_and_test_counts
+    local_subdir: datasets/magicbrush/test
+    expected_structure: [edit_sessions.json, edit_turns.json, images]
+    expected_counts: {sessions: 535, turns: 1053}
+    identity_note: Pinned public mirror; session/turn contract is hard-verified.
+  crispedit:
+    name: CrispEdit labeling 39k
+    provider: huggingface
+    repo_type: dataset
+    repo_id: TTangenty/CrispEdit-labeling-39k
+    revision: dcbd1c952e93e4361ad862b33f3acd1cc74bec5a
+    identity_policy: exact_commit
+    local_subdir: datasets/crispedit
+    expected_structure: [dataset_manifest.json, shards]
+    expected_rows: 38971
+  scaleedit:
+    name: ScaleEdit labeling 25k
+    provider: huggingface
+    repo_type: dataset
+    repo_id: TTangenty/ScaleEdit-labeling-25k
+    revision: f97ffb061d4275bcbbff6500572139b6f8df1c4e
+    identity_policy: exact_commit
+    local_subdir: datasets/scaleedit
+    expected_structure: [dataset_manifest.json, shards]
+    expected_rows: 25664
+  interedit:
+    name: Inter-Edit-Train official release
+    provider: huggingface
+    repo_type: dataset
+    repo_id: a1557811266/Inter-Edit-Train
+    revision: b319d9fdb45cc670ec263fe4aeaa962f1623d5dc
+    identity_policy: exact_commit
+    local_subdir: datasets/interedit
+    expected_structure: [manifest.json, metadata, source_shards, asset_shards]
+    expected_rows: 1099964
+  dino:
+    name: DINOv2 base evaluator
+    provider: huggingface
+    repo_type: model
+    repo_id: facebook/dinov2-base
+    revision: f9e44c814b77203eaa57a6bdbbd535f21ede1415
+    identity_policy: exact_commit
+    local_subdir: models/dinov2-base
+    expected_structure: [config.json, preprocessor_config.json]
+  clip:
+    name: CLIP ViT-L/14 evaluator
+    provider: huggingface
+    repo_type: model
+    repo_id: openai/clip-vit-large-patch14
+    revision: 32bd64288804d66eefd0ccbe215aa642df71cc41
+    identity_policy: exact_commit
+    local_subdir: models/clip-vit-large-patch14
+    expected_structure: [config.json, preprocessor_config.json]
+  lpips:
+    name: LPIPS AlexNet evaluator
+    provider: python_package
+    package: lpips
+    revision: 0.1.4
+    backbone: alex
+    torchvision_weights: AlexNet_Weights.IMAGENET1K_V1
+    local_subdir: models/torch
+    identity_policy: locked_package_and_backbone
