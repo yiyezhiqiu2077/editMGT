@@ -145,6 +145,3 @@ git diff --check
 - [Region-DiMO](docs/DIMO_PORTING.md)
 - [环境配置](docs/ENVIRONMENT.md)
 
-## 上游与许可证
-
-本项目衍生自 EditMGT，许可证见 [LICENSE](LICENSE)。
