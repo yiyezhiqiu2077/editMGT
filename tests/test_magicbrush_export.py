@@ -1,4 +1,5 @@
-"""CPU-only tiny Parquet releases exercise the production export path."""
+from __future__ import annotations
+
 import hashlib
 from io import BytesIO
 import json
@@ -333,8 +334,44 @@ def test_manifest_is_accepted_by_existing_canonical_builder(release):
     subprocess.run([sys.executable, str(script), "--manifest", str(output / "train/manifest.jsonl"),
                     "--dataset-root", str(output / "train"), "--revision", export.REVISION, "--output", str(canonical)], check=True)
     rows = [json.loads(line) for line in canonical.read_text().splitlines()]
-    assert len(rows) == 2
-    assert rows[0]["group_id"] == "0017"
-    assert rows[0]["region_fraction"] == 5 / 6
-    assert rows[0]["source_locator"]["relative_path"] == "images/0017_1/source.png"
-    assert rows[0]["region_sha256"] == manifest_rows(output)[0]["mask_edit_sha256"]
+    assert rows == []
+    rejections = [json.loads(line) for line in canonical.with_suffix(".rejections.jsonl").read_text().splitlines()]
+    assert len(rejections) == 2
+    assert {item["reason"] for item in rejections} == {"unaligned_aspect_ratio"}
+    report = json.loads(canonical.with_suffix(".report.json").read_text())
+    assert report["accepted_rows"] == 0
+    assert report["rejected_rows"] == 2
+    assert report["rejection_counts"] == {"unaligned_aspect_ratio": 2}
+
+
+def test_canonical_builder_rejects_unaligned_magicbrush_geometry(tmp_path):
+    root = tmp_path / "train"
+    images = root / "images/0017_1"
+    images.mkdir(parents=True)
+    Image.new("RGB", (1024, 1023), (1, 2, 3)).save(images / "source.png")
+    Image.new("RGB", (1024, 1024), (4, 5, 6)).save(images / "target.png")
+    Image.new("L", (1024, 1024), 255).save(images / "mask_edit.png")
+    manifest_row = {
+        "sample_key": "0017_1",
+        "img_id": "0017",
+        "turn_index": 1,
+        "instruction": "Change the sign",
+        "source": "images/0017_1/source.png",
+        "target": "images/0017_1/target.png",
+        "mask_edit": "images/0017_1/mask_edit.png",
+    }
+    manifest = root / "manifest.jsonl"
+    manifest.write_text(json.dumps(manifest_row) + "\n")
+    canonical = tmp_path / "canonical.jsonl"
+    script = Path(export.__file__).with_name("build_magicbrush_canonical.py")
+    subprocess.run([sys.executable, str(script), "--manifest", str(manifest),
+                    "--dataset-root", str(root), "--revision", export.REVISION, "--output", str(canonical)], check=True)
+    assert canonical.read_text() == ""
+    rejections = [json.loads(line) for line in canonical.with_suffix(".rejections.jsonl").read_text().splitlines()]
+    assert len(rejections) == 1
+    assert rejections[0]["reason"] == "unaligned_aspect_ratio"
+    assert rejections[0]["sample_key"] == "0017_1"
+    report = json.loads(canonical.with_suffix(".report.json").read_text())
+    assert report["accepted_rows"] == 0
+    assert report["rejected_rows"] == 1
+    assert report["rejection_counts"] == {"unaligned_aspect_ratio": 1}

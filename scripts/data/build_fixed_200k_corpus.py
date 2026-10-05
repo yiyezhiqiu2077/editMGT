@@ -13,14 +13,18 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.explicit_region.canonical import validate_record
+from src.explicit_region.canonical import image_from_locator, validate_record
 from src.explicit_region.config import load_config
 from src.explicit_region.contracts import sha256_file
+from src.explicit_region.dataset import _align_to_mask_coordinates
 from src.explicit_region.fixed_corpus import (
     DATASET_PRIORITY, apply_translation, assert_frozen_corpus, canonical_freeze_order,
     collapse_exact_sample_duplicates, corpus_counts, deterministic_order,
     select_interedit, MissingTranslation, cached_translator, validate_frozen_language,
 )
+
+
+GEOMETRY_SANITATION_DATASETS = frozenset({"magicbrush"})
 
 
 def read_jsonl(path: str | Path) -> list[dict]:
@@ -31,11 +35,50 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
 
 
+def sanitize_geometry(rows: list[dict], dataset_roots: dict[str, Path]) -> tuple[list[dict], list[dict], dict[str, int]]:
+    kept, rejected = [], []
+    counts = Counter()
+    for row in rows:
+        if row["dataset_name"] not in GEOMETRY_SANITATION_DATASETS:
+            kept.append(row)
+            continue
+        root = dataset_roots[row["dataset_name"]]
+        source = image_from_locator(row["source_locator"], root)
+        target = image_from_locator(row["target_locator"], root)
+        mask = image_from_locator(row["region_locator"], root)
+        try:
+            aligned_source, aligned_target, _ = _align_to_mask_coordinates(
+                source, target, mask, row["sample_uid"],
+            )
+            if aligned_source is not source:
+                aligned_source.close()
+            if aligned_target is not target:
+                aligned_target.close()
+            kept.append(row)
+        except ValueError as exc:
+            if "unaligned aspect ratio" not in str(exc):
+                raise
+            counts["unaligned_aspect_ratio"] += 1
+            rejected.append({
+                "dataset": row["dataset_name"],
+                "sample_uid": row["sample_uid"],
+                "group_id": row["group_id"],
+                "reason": "unaligned_aspect_ratio",
+                "error": str(exc),
+            })
+        finally:
+            source.close()
+            target.close()
+            mask.close()
+    return kept, rejected, dict(sorted(counts.items()))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/data/fixed_200k.yaml")
     for name in DATASET_PRIORITY:
         parser.add_argument(f"--{name}-pool", required=True)
+        parser.add_argument(f"--{name}-root")
     parser.add_argument("--validation", action="append", default=[])
     parser.add_argument("--translation-cache", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -56,17 +99,44 @@ def main() -> None:
     validation_sources = {row["source_sha256"] for row in validation}
     validation_groups = {(row["dataset_name"], row["group_id"]) for row in validation}
     pools, exact_removed = {}, []
+    geometry_rejections = []
+    geometry_sanitation = {
+        "schema_version": "fixed200k-geometry-sanitization-v1",
+        "datasets": {},
+        "rejected_rows": 0,
+    }
+    dataset_roots = {
+        name: Path(value).resolve()
+        for name in DATASET_PRIORITY
+        if (value := getattr(args, f"{name}_root", None))
+    }
     for name in DATASET_PRIORITY:
         rows = read_jsonl(getattr(args, f"{name}_pool"))
         for row in rows:
             validate_record(row)
             if row["dataset_name"] != name:
                 raise ValueError(f"{name} pool contains {row['dataset_name']} row")
+        if name in GEOMETRY_SANITATION_DATASETS and name in dataset_roots:
+            before = len(rows)
+            rows, rejected, rejection_counts = sanitize_geometry(rows, dataset_roots)
+            geometry_rejections.extend(rejected)
+            geometry_sanitation["datasets"][name] = {
+                "before": before,
+                "after": len(rows),
+                "rejected": len(rejected),
+                "rejection_counts": rejection_counts,
+            }
+            geometry_sanitation["rejected_rows"] += len(rejected)
         rows = [row for row in rows if row["source_sha256"] not in validation_sources
                 and (row["dataset_name"], row["group_id"]) not in validation_groups]
         pools[name], removed = collapse_exact_sample_duplicates(rows, seed)
         exact_removed.extend({"reason": "same_dataset_exact_duplicate", "dataset": name,
                               "sample_uid": row["sample_uid"]} for row in removed)
+
+    write_jsonl(output / "geometry_rejections.jsonl", geometry_rejections)
+    (output / "geometry_sanitation_report.json").write_text(
+        json.dumps(geometry_sanitation, indent=2, sort_keys=True) + "\n"
+    )
 
     translate = cached_translator(args.translation_cache, translation_config)
 
@@ -230,6 +300,7 @@ def main() -> None:
         "dataset_counts": corpus_counts(frozen), "total_rows": len(frozen),
         "interedit_requested_quota": inter_quota, "interedit_redistribution": redistribution,
         "validation_source_count": len(validation_sources), "validation_group_count": len(validation_groups),
+        "geometry_sanitation": geometry_sanitation,
     }
     (output / "selection_report.json").write_text(json.dumps(selection_report, indent=2, sort_keys=True) + "\n")
     translation_report = {
@@ -252,6 +323,8 @@ def main() -> None:
         "translation_cache_sha256": sha256_file(args.translation_cache),
         "translation_contract": translation_config,
         "duplicate_policy": config["duplicate_policy"],
+        "geometry_sanitation_report": str((output / "geometry_sanitation_report.json").resolve()),
+        "geometry_rejections_sha256": sha256_file(output / "geometry_rejections.jsonl"),
     }
     git_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=True).stdout.strip()
     metadata["created_from_git_sha"] = git_sha

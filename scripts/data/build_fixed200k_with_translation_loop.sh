@@ -20,6 +20,7 @@ elif [[ "$mode" == "--train" ]]; then
   request_root="$fixed"
   builder=(uv run --frozen python scripts/data/build_fixed_200k_corpus.py --config configs/data/fixed_200k.yaml
   --magicbrush-pool "$fixed/pools/magicbrush_train.jsonl"
+  --magicbrush-root "$MAGICBRUSH_ROOT"
   --crispedit-pool "$fixed/pools/crispedit.jsonl"
   --scaleedit-pool "$fixed/pools/scaleedit.jsonl"
   --interedit-pool "$fixed/pools/interedit.jsonl"
