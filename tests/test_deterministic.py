@@ -28,3 +28,12 @@ def test_unresolved_environment_fails(tmp_path, monkeypatch):
     monkeypatch.delenv("THIS_MUST_NOT_EXIST", raising=False)
     with pytest.raises(KeyError):
         load_config(path)
+
+
+def test_overridden_parent_environment_is_not_required(tmp_path, monkeypatch):
+    parent = tmp_path / "parent.yaml"
+    child = tmp_path / "child.yaml"
+    parent.write_text("data:\n  manifest: ${OVERRIDDEN_PARENT_ENV}\n")
+    child.write_text("extends: parent.yaml\ndata:\n  manifest: local.jsonl\n")
+    monkeypatch.delenv("OVERRIDDEN_PARENT_ENV", raising=False)
+    assert load_config(child)["data"]["manifest"] == "local.jsonl"

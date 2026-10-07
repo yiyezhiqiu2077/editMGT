@@ -1,0 +1,6 @@
+extends: e3_base.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-fresh-8
+max_optimizer_steps: 8
+scheduler_horizon_steps: 8
+warmup_steps: 2
+checkpoint_steps: [4, 8]

@@ -19,6 +19,7 @@ import torch
 
 from src.explicit_region.config import load_config
 from src.explicit_region.metrics import MaskedLPIPS, masked_l1, masked_psnr, masked_ssim, finite_mean
+from src.explicit_region.selection import summarize_selection_metrics
 
 
 def tensor(path, *, mask=False):
@@ -143,6 +144,7 @@ def evaluate(manifest, config, output, device):
         "thresholds_preregistered": selection.get("tau_edit") is not None and selection.get("tau_noop") is not None,
         "per_generation": rows, "per_sample_after_seed_mean": samples, "aggregate": aggregate,
     }
+    result["selection_summary"] = summarize_selection_metrics(result)
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result

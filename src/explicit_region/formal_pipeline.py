@@ -260,3 +260,80 @@ def verify_formal_ready(formal_assets: str | Path, corpus_ready: str | Path,
         if ready.get(key) != value:
             raise RuntimeError(f"FORMAL_PIPELINE_NOT_READY: {key} mismatch")
     return ready
+
+
+def require_bound_smoke(smoke, corpus_ready, current_git):
+    """Reject stale or incomplete smoke evidence, even when its label says PASS."""
+    corpus = json.loads(Path(corpus_ready).read_text())
+    expected = {'git_sha': current_git, 'world_size': 8, 'data_name': 'fixed_200k',
+                'train_manifest_sha256': corpus['train_manifest_sha256'],
+                'corpus_ready_sha256': sha256_file(corpus_ready)}
+    proofs = ('lora_grad_finite_nonzero', 'region_grad_finite_nonzero',
+              'frozen_base_gradients_zero', 'optimizer_scheduler_updates_match',
+              'checkpoint_exact_replay', 'optimizer_exact_replay', 'scheduler_exact_replay',
+              'sampler_state_exact_replay', 'rank_rng_exact_replay', 'committed_cursor_match',
+              'fingerprint_match', 'dataset_identity_bound')
+    if (smoke.get('status') != 'PASS' or any(smoke.get(k) != v for k, v in expected.items())
+            or any(smoke.get(k) is not True for k in proofs)):
+        raise RuntimeError('FORMAL_PIPELINE_NOT_READY: current-code exact smoke evidence required')
+
+
+def verify_pipeline_mode(*, mode, formal_assets, corpus_ready, current_git,
+                         formal_ready=None, pre_smoke=False, selection_config=None,
+                         selected_checkpoint=None, require_reattestation=False):
+    """One provenance implementation; training never depends on selection."""
+    if mode not in ('train', 'select'):
+        raise ValueError('unknown verification mode')
+    if pre_smoke:
+        verify_formal_asset_corpus(formal_assets, corpus_ready, current_git)
+        ready = {'world_size': None}
+    else:
+        if formal_ready is None:
+            raise RuntimeError('FORMAL_PIPELINE_NOT_READY: --formal-ready is required')
+        ready = verify_formal_ready(formal_assets, corpus_ready, formal_ready, current_git)
+    if require_reattestation:
+        corpus = json.loads(Path(corpus_ready).read_text())
+        attestation = corpus.get('reattestation', {})
+        if (attestation.get('status') != 'READY' or attestation.get('git_sha') != current_git
+                or attestation.get('manifest_unchanged') is not True
+                or attestation.get('validation_unchanged') is not True
+                or attestation.get('loader_rows') != 200000):
+            raise RuntimeError('FORMAL_PIPELINE_NOT_READY: current-code re-attestation required')
+        files = corpus.get('files', {})
+        try:
+            alpha = json.loads(Path(files['magicbrush_alpha_probe']['path']).read_text())
+            loader = json.loads(Path(files['current_loader_compatibility']['path']).read_text())
+            before = json.loads(Path(files['reattest_identity_before']['path']).read_text())
+            after = json.loads(Path(files['reattest_identity_after']['path']).read_text())
+        except (KeyError, FileNotFoundError) as exc:
+            raise RuntimeError('FORMAL_PIPELINE_NOT_READY: re-attestation evidence missing') from exc
+        if (alpha.get('status') != 'PASS' or alpha.get('mode') not in ('RAW_COMPARE', 'PROVENANCE_REUSE')
+                or len(alpha.get('records', [])) != 32
+                or len({r['sample_uid'] for r in alpha['records']}) != 32
+                or any(r.get('status') != 'PASS' or r.get('binary_disagreement') != 0
+                       or r.get('exact_disagreement') != 0 for r in alpha['records'])
+                or loader.get('status') != 'PASS' or loader.get('rows') != 200000
+                or before != after or before.get('train_sha256') != corpus['train_manifest_sha256']):
+            raise RuntimeError('FORMAL_PIPELINE_NOT_READY: re-attestation evidence failed')
+        if not pre_smoke:
+            smoke = json.loads(Path(ready['smoke_verification']['path']).read_text())
+            require_bound_smoke(smoke, corpus_ready, current_git)
+    if mode == 'select':
+        if selection_config is None:
+            raise RuntimeError('SELECTION_RULE_NOT_PREREGISTERED: --selection-config required')
+        require_selection_ready(selection_config)
+        if selected_checkpoint is None:
+            raise RuntimeError('SELECTED_CHECKPOINT_IDENTITY_REQUIRED')
+        selected = json.loads(Path(selected_checkpoint).read_text())
+        if (selected.get('status') != 'READY' or selected.get('git_sha') != current_git
+                or selected.get('formal_assets_sha256') != sha256_file(formal_assets)):
+            raise RuntimeError('SELECTED_CHECKPOINT_IDENTITY_MISMATCH')
+        files = selected.get('files', {})
+        if not {'adapter_model.safetensors', 'mask_conditioning.safetensors'} <= files.keys():
+            raise RuntimeError('SELECTED_CHECKPOINT_CANDIDATE_INCOMPLETE')
+        if selected.get('checkpoint_identity_sha256') != stable_json_hash(files):
+            raise RuntimeError('SELECTED_CHECKPOINT_IDENTITY_MISMATCH')
+        for name, expected in files.items():
+            if Path(name).name != name or sha256_file(Path(selected['checkpoint_path']) / name) != expected:
+                raise RuntimeError('SELECTED_CHECKPOINT_CANDIDATE_HASH_MISMATCH')
+    return ready

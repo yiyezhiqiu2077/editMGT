@@ -1,0 +1,5 @@
+extends: e3_tiny64_overfit.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-tiny64-plumbing-smoke
+max_optimizer_steps: 2
+scheduler_horizon_steps: 2
+checkpoint_steps: [0, 2]

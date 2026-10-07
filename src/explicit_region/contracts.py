@@ -79,16 +79,31 @@ def audit_component_identity(model_root: str | Path, output_path: str | Path | N
     return report
 
 
+def region_embedding_is_active(corruption: dict) -> bool:
+    """Return whether the recipe uses persistent edit-region conditioning."""
+    if not corruption.get("persistent_conditioning", True):
+        return False
+    mode = corruption["mode"]
+    return mode == "roi_hardlock" or (
+        mode == "mixed" and float(corruption.get("roi_probability", 0.5)) > 0
+    )
+
+
+def configure_region_trainability(model, corruption: dict) -> bool:
+    active = region_embedding_is_active(corruption)
+    model.edit_region_embedding.requires_grad_(active)
+    return active
+
+
 def audit_trainable_parameters(
-    components: dict[str, object], optimizer, output_path: str | Path | None = None
+    components: dict[str, object], optimizer, output_path: str | Path | None = None,
+    *, region_conditioning_active: bool = True,
 ) -> dict:
     rows = []
-    all_ids = set()
     trainable_ids = set()
     for component, module in components.items():
         for name, parameter in module.named_parameters():
             pid = id(parameter)
-            all_ids.add(pid)
             if parameter.requires_grad:
                 trainable_ids.add(pid)
             rows.append(
@@ -100,15 +115,21 @@ def audit_trainable_parameters(
                     "numel": parameter.numel(),
                 }
             )
-    optimizer_ids = {id(p) for group in optimizer.param_groups for p in group["params"]}
+    optimizer_parameters = [p for group in optimizer.param_groups for p in group["params"]]
+    optimizer_ids = {id(p) for p in optimizer_parameters}
+    if len(optimizer_ids) != len(optimizer_parameters):
+        raise RuntimeError("duplicate parameter in optimizer")
     if optimizer_ids != trainable_ids:
         raise RuntimeError(
             f"optimizer/trainable mismatch: optimizer_only={len(optimizer_ids-trainable_ids)}, "
             f"trainable_only={len(trainable_ids-optimizer_ids)}"
         )
     edit_rows = [row for row in rows if row["name"].endswith("edit_region_embedding")]
-    if len(edit_rows) != 1 or not edit_rows[0]["requires_grad"]:
-        raise RuntimeError("exactly one trainable edit_region_embedding is required")
+    if len(edit_rows) != 1 or edit_rows[0]["requires_grad"] != region_conditioning_active:
+        raise RuntimeError(
+            "exactly one edit_region_embedding with requires_grad="
+            f"{region_conditioning_active} is required by this recipe"
+        )
     total = sum(row["numel"] for row in rows)
     trainable = sum(row["numel"] for row in rows if row["requires_grad"])
     lora = sum(row["numel"] for row in rows if row["requires_grad"] and "lora_" in row["name"])
@@ -118,7 +139,11 @@ def audit_trainable_parameters(
         "trainable_params": trainable,
         "trainable_ratio": trainable / total,
         "lora_params": lora,
+        "region_conditioning_active": region_conditioning_active,
         "edit_region_embedding_params": edit_rows[0]["numel"],
+        "trainable_edit_region_embedding_params": (
+            edit_rows[0]["numel"] if region_conditioning_active else 0
+        ),
     }
     if output_path is not None:
         path = Path(output_path)

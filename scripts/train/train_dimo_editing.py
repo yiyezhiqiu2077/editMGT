@@ -40,6 +40,7 @@ from src.dimo.step import complete_dimo_step
 from src.explicit_region.config import load_config
 from src.explicit_region.dataset import MagicBrushAlignedDataset
 from src.explicit_region.epoch_sampler import DeterministicEpochSampler
+from src.explicit_region.fixed_corpus import verify_mini_corpus_ready
 from src.explicit_region.fixed_dataset import FixedCorpusDataset
 from src.explicit_region.masks import pixel_mask_to_token_mask
 from src.explicit_region.modeling import load_released_components
@@ -71,24 +72,33 @@ def build_dataset(config: dict, *, cursor: int, epoch: int):
     data = config["data"]
     common = dict(
         resolution=int(config["resolution"]), base_seed=int(config["seed"]),
-        max_resample_attempts=int(config["geometry"]["max_resample_attempts"]),
         minimum_mask_retention=float(config["geometry"]["minimum_mask_retention"]),
     )
-    if data["name"] == "fixed_200k":
+    if data["name"] in ("fixed_200k", "fixed_corpus_dev"):
+        if data["name"] == "fixed_corpus_dev":
+            expected_rows = int(data["expected_rows"])
+            verify_mini_corpus_ready(data["corpus_ready"], expected_rows=expected_rows)
         dataset = FixedCorpusDataset(
             data["manifest"], data["roots"], verify_hashes=data.get("verify_hashes_at_read", True),
+            max_random_attempts=int(config["geometry"]["max_resample_attempts"]),
             **common,
         )
+        if data["name"] == "fixed_corpus_dev" and len(dataset) != expected_rows:
+            raise RuntimeError("MINI_CORPUS_NOT_READY: DiMO row count mismatch")
         manifest_hash = sha256_file(data["manifest"])
         sampler = DeterministicEpochSampler(
             len(dataset), base_seed=config["seed"], epoch=epoch,
             train_manifest_sha256=manifest_hash, samples_consumed_in_epoch=cursor,
         )
     elif data["name"] == "magicbrush":
-        dataset = MagicBrushAlignedDataset(data["manifest"], **common)
+        dataset = MagicBrushAlignedDataset(
+            data["manifest"],
+            max_resample_attempts=int(config["geometry"]["max_resample_attempts"]),
+            **common,
+        )
         sampler = list(range(cursor, len(dataset)))
     else:
-        raise ValueError("Region-DiMO v1 supports fixed_200k or prep-only magicbrush data")
+        raise ValueError("Region-DiMO v1 supports fixed corpora or prep-only magicbrush data")
     return dataset, sampler
 
 

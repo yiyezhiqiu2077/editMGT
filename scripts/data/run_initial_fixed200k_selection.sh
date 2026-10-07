@@ -6,6 +6,8 @@ touch "$fixed/translation_cache.jsonl"
 builder=(uv run python scripts/data/build_fixed_200k_corpus.py --config configs/data/fixed_200k.yaml
   --magicbrush-pool "$fixed/pools/magicbrush_train.jsonl" --crispedit-pool "$fixed/pools/crispedit.jsonl"
   --scaleedit-pool "$fixed/pools/scaleedit.jsonl" --interedit-pool "$fixed/pools/interedit.jsonl"
+  --magicbrush-root "$MAGICBRUSH_ROOT" --crispedit-root "$CRISPEDIT_ROOT"
+  --scaleedit-root "$SCALEEDIT_ROOT" --interedit-root "$INTEREDIT_ROOT"
   --validation "$fixed/validation/magicbrush_official_dev.jsonl" --validation "$fixed/validation/crispedit_aux128.jsonl"
   --validation "$fixed/validation/scaleedit_aux128.jsonl" --validation "$fixed/validation/interedit_aux128.jsonl"
   --translation-cache "$fixed/translation_cache.jsonl" --output-dir "$fixed")

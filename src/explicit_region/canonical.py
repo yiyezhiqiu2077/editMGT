@@ -179,7 +179,9 @@ def verify_record_assets(record: dict[str, Any], roots: dict[str, str | Path]) -
             )
 
 
-def load_verified_record_images(record: dict[str, Any], root: str | Path) -> tuple[Image.Image, Image.Image, Image.Image]:
+def load_verified_record_images(
+    record: dict[str, Any], root: str | Path, *, tar_reader: Any | None = None,
+) -> tuple[Image.Image, Image.Image, Image.Image]:
     """Read each locator once, verify its content identity, then decode it."""
     validate_record(record)
     images = []
@@ -188,6 +190,8 @@ def load_verified_record_images(record: dict[str, Any], root: str | Path) -> tup
         if locator["backend"] == "derived_bbox":
             value = locator_identity_bytes(locator)
             image = image_from_locator(locator, root)
+        elif locator["backend"] == "tar" and tar_reader is not None:
+            value = tar_reader.read(locator["archive"], locator["member"])
         else:
             value = read_locator_bytes(locator, root)
         actual = sha256_bytes(value)

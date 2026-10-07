@@ -1,4 +1,7 @@
 import json
+import gzip
+
+import pytest
 
 from src.explicit_region.config import load_config
 from src.explicit_region.interedit import iter_metadata
@@ -15,6 +18,25 @@ def test_interedit_fixture_and_better_filter():
     assert len(records) == 3
     assert {row.edit_type for row in records} == {"Add", "Remove", "Local"}
     assert all(row.mask_semantics == "user_guidance_region" for row in records)
+
+
+def test_interedit_jsonl_gzip_and_strict_better_data(tmp_path):
+    row = {
+        "sample_id": 1, "source_id": 2, "edit_type": "Add",
+        "instruction": "添加一只狗", "better_data": True,
+        "source_archive": "source.tar", "source_file": "source.png",
+        "asset_archive": "asset.tar", "target_file": "target.png",
+        "mask_file": "mask.png",
+    }
+    path = tmp_path / "metadata.jsonl.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    assert [record.sample_id for record in iter_metadata(path)] == [1]
+    row["better_data"] = "false"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    with pytest.raises(ValueError, match="JSON boolean"):
+        list(iter_metadata(path))
 
 
 def test_language_detection_and_english_passthrough():

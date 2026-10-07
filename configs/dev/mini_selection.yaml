@@ -1,0 +1,6 @@
+schema_version: mini-selection-v1
+dev_only: true
+candidate_steps: [4, 8, 12, 16]
+max_outside_masked_lpips: null
+fallback_metric: inside_masked_lpips
+fallback_direction: minimize

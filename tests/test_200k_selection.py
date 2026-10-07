@@ -86,3 +86,44 @@ def test_synthetic_four_dataset_fixed_200_with_translation_backfill(tmp_path):
     backfills=[json.loads(line) for line in (output/"backfill_history.jsonl").read_text().splitlines()]
     assert rejections and any("copy_output" in row["qa_flags"] for row in rejections)
     assert any(row["reason"]=="translation_qa" for row in backfills)
+
+
+def test_missing_translation_holds_provisional_slot_without_consuming_reserve(tmp_path):
+    pools = {
+        "magicbrush": [synthetic_record("magicbrush", 0)],
+        "crispedit": [synthetic_record("crispedit", i) for i in range(3)],
+        "scaleedit": [synthetic_record("scaleedit", 0)],
+        "interedit": [synthetic_record(
+            "interedit", i, original_type=("Add", "Remove", "Local", "Texture")[i % 4],
+            canonical_type={"Add":"add","Remove":"remove","Local":"local_attribute","Texture":"texture"}[("Add", "Remove", "Local", "Texture")[i % 4]],
+        ) for i in range(12)],
+    }
+    for row in pools["crispedit"]:
+        row["instruction_original"] = f"添加一只狗 {row['group_id']}"
+        row["instruction_en"] = ""
+        row["language_original"] = "zho_Hans"
+        row["translation_status"] = "pending"
+        row["sample_uid"] = sample_uid_for(row)
+    pending_uid = deterministic_order(pools["crispedit"])[0]["sample_uid"]
+    paths = {}
+    for name, rows in pools.items():
+        paths[name] = tmp_path / f"{name}.jsonl"; write_jsonl(paths[name], rows)
+    config = yaml.safe_load(Path("configs/data/fixed_200k.yaml").read_text())
+    config["train_total"] = 8; config["strict_dataset_counts"] = True
+    config["dataset_policy"]["magicbrush"] = {"fixed_count": 1}
+    config["dataset_policy"]["crispedit"]["cap"] = 1
+    config["dataset_policy"]["scaleedit"]["cap"] = 1
+    config_path = tmp_path / "config.yaml"; config_path.write_text(yaml.safe_dump(config))
+    cache = tmp_path / "cache.jsonl"; cache.write_text("")
+    output = tmp_path / "fixed"
+    command = [sys.executable, "scripts/data/build_fixed_200k_corpus.py", "--config", str(config_path),
+        "--magicbrush-pool", str(paths["magicbrush"]), "--crispedit-pool", str(paths["crispedit"]),
+        "--scaleedit-pool", str(paths["scaleedit"]), "--interedit-pool", str(paths["interedit"]),
+        "--translation-cache", str(cache), "--output-dir", str(output), "--allow-nonproduction-total"]
+    environment = os.environ.copy(); environment["TRANSLATOR_REVISION"] = "fixture-translation-rev"
+    result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], env=environment)
+    assert result.returncode == 42
+    required = [json.loads(line) for line in (output / "translation_required.jsonl").read_text().splitlines()]
+    assert [row["sample_uid"] for row in required] == [pending_uid]
+    reserve = [json.loads(line) for line in (output / "reserve_order.jsonl").read_text().splitlines()]
+    assert pending_uid not in {row["sample_uid"] for row in reserve}

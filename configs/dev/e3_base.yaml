@@ -1,0 +1,51 @@
+model:
+  repo_or_root: ${EDITMGT_MODEL_ROOT}
+  transformer_subfolder: editmgt
+  text_encoder_subfolder: text_encoder
+  tokenizer_subfolder: tokenizer
+  llm_encoder_subfolder: llm_encoder
+  vqvae_subfolder: vqvae
+  scheduler_subfolder: scheduler
+data:
+  name: fixed_corpus_dev
+  manifest: ${MINI_ROOT}/corpus/train_512.jsonl
+  metadata: ${MINI_ROOT}/corpus/train_512.meta.json
+  corpus_ready: ${MINI_ROOT}/corpus/MINI_CORPUS_READY.json
+  expected_rows: 512
+  verify_hashes_at_read: true
+  roots:
+    magicbrush: ${MINI_MAGICBRUSH_ROOT}
+    crispedit: ${MINI_ROOT}/assets/crispedit
+    scaleedit: ${MINI_ROOT}/assets/scaleedit
+    interedit: ${MINI_ROOT}/assets/interedit
+  translation_cache: ${MINI_ROOT}/corpus/translation_cache.jsonl
+  translation_config: configs/translation/nllb.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-placeholder
+resolution: 1024
+seed: 42
+precision: bf16
+component_dtypes: {transformer: bf16, text_encoders: bf16, vqvae: fp32}
+torch_compile: false
+gradient_checkpointing: true
+batch_per_gpu: 1
+gradient_accumulation: 4
+num_workers: 0
+epochs: 1
+max_optimizer_steps: 16
+scheduler_horizon_steps: 16
+warmup_steps: 2
+checkpoint_steps: [4, 8, 12, 16]
+condition_dropout: {enabled: true, probability: 0.1, scope: text_only}
+validation: {enabled: false}
+quality_gate: {enabled: false}
+geometry: {max_resample_attempts: 8, minimum_mask_retention: 0.75}
+token_mask: {mode: any_overlap, coverage_threshold: 0.5, dilation_tokens: 0, minimum_edit_tokens: 1}
+corruption: {mode: roi_hardlock, roi_probability: 1.0, full_roi_mask_probability: 0.15, persistent_conditioning: true}
+lora:
+  scope: both
+  rank: 64
+  alpha: 64
+  dropout: 0.05
+  target_modules: [to_q, to_k, to_v, to_out.0, ff.net.2, proj_mlp, proj_out]
+optimizer: {name: AdamW, learning_rate: 0.00003, betas: [0.9, 0.95], weight_decay: 0.01, gradient_clip: 1.0, scheduler: constant_with_warmup}
+evaluation: {generation_seeds: [0], bootstrap_seed: 42, bootstrap_resamples: 1000}

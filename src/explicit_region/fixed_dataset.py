@@ -14,6 +14,7 @@ from .dataset import _align_to_mask_coordinates
 from .deterministic import stable_seed
 from .geometry import apply_geometry, image_to_tensor, sample_geometry
 from .language import contains_han
+from .interedit import TarMemberReader
 
 
 class CanonicalAlignedDataset(Dataset):
@@ -34,6 +35,13 @@ class CanonicalAlignedDataset(Dataset):
         self.verify_hashes = verify_hashes
         self.max_random_attempts = max_random_attempts
         self.minimum_mask_retention = minimum_mask_retention
+        self.tar_reader = (
+            TarMemberReader(self.root)
+            if any(
+                row[f"{role}_locator"]["backend"] == "tar"
+                for row in self.rows for role in ("source", "target", "region")
+            ) else None
+        )
         if not self.rows:
             raise ValueError("canonical dataset is empty")
         for row in self.rows:
@@ -58,7 +66,9 @@ class CanonicalAlignedDataset(Dataset):
         row = self.rows[index]
         try:
             if self.verify_hashes:
-                source, target, mask = load_verified_record_images(row, self.root)
+                source, target, mask = load_verified_record_images(
+                    row, self.root, tar_reader=self.tar_reader
+                )
             if not row["instruction_en"] or contains_han(row["instruction_en"]):
                 raise FrozenCorpusIntegrityError("invalid frozen instruction_en")
             if not self.verify_hashes:
@@ -155,3 +165,24 @@ class FixedCorpusDataset(Dataset):
         row = self.rows[index]
         backend, mapping = self.backends[row["dataset_name"]]
         return backend.get_with_global_index(mapping[index], global_index)
+
+
+class RepeatedFixedCorpusDataset(Dataset):
+    """Deterministic finite repeated view without duplicating frozen records."""
+
+    def __init__(self, dataset: FixedCorpusDataset, length: int):
+        if length < len(dataset):
+            raise ValueError("repeated dataset length cannot be smaller than its base")
+        self.dataset = dataset
+        self.length = int(length)
+
+    def __len__(self) -> int:
+        return self.length
+
+    def set_epoch(self, epoch: int) -> None:
+        self.dataset.set_epoch(epoch)
+
+    def __getitem__(self, index: int) -> dict:
+        if index < 0 or index >= self.length:
+            raise IndexError(index)
+        return self.dataset.get_with_global_index(index % len(self.dataset), index)

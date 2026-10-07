@@ -1,0 +1,7 @@
+extends: e3_tiny64_overfit.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-cross-epoch-fresh4
+epochs: 2
+max_optimizer_steps: 4
+scheduler_horizon_steps: 4
+checkpoint_steps: [1, 2, 3, 4]
+data: {repeat_to_optimizer_steps: false}

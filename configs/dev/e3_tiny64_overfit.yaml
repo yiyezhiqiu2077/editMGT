@@ -1,0 +1,10 @@
+extends: e3_base.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-tiny64-overfit-300
+data:
+  manifest: ${MINI_ROOT}/learnability/tiny64/train_64.jsonl
+  corpus_ready: ${MINI_ROOT}/learnability/tiny64/TINY64_READY.json
+  expected_rows: 64
+  repeat_to_optimizer_steps: true
+max_optimizer_steps: 300
+scheduler_horizon_steps: 300
+checkpoint_steps: [0, 25, 50, 100, 200, 300]

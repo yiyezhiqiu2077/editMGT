@@ -1,0 +1,8 @@
+extends: periodic_probe.yaml
+guidance_scale: 5.0
+# Diagnostic only, not an asserted optimum or formal checkpoint selection.
+generation_seeds: [0]
+steps: 12
+inference_timestep_mode: roi_relative
+reference_strength: 1.0
+selection: {status: DIAGNOSTIC_ONLY, threshold_preserve: null, tau_edit: null, tau_noop: null}

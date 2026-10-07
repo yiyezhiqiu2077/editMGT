@@ -1,0 +1,3 @@
+extends: e3_cross_epoch_fresh4.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-cross-epoch-first2
+max_optimizer_steps: 2

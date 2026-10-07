@@ -5,9 +5,10 @@ mode="${1:---print-command}"
 : "${ASSET_ROOT:?ASSET_ROOT required}" "${DERIVED_ROOT:?DERIVED_ROOT required}" "${EDITMGT_OUTPUT_ROOT:?EDITMGT_OUTPUT_ROOT required}"
 marker="$DERIVED_ROOT/fixed200k/CORPUS_READY.json"
 formal_assets="$ASSET_ROOT/artifacts/formal_assets.json"
-launcher=(uv run accelerate launch --multi_gpu --num_processes 8 --gpu_ids 0,1,2,3,4,5,6,7 scripts/train/train_explicit_region.py)
+port="$(pick_main_process_port)"
+launcher=(uv run accelerate launch --multi_gpu --num_processes 8 --gpu_ids 0,1,2,3,4,5,6,7 --main_process_port "$port" scripts/train/train_explicit_region.py)
 commands=(
-  "uv run python scripts/setup/verify_formal_pipeline.py --formal-assets $formal_assets --corpus-ready $marker --pre-smoke"
+  "uv run python scripts/setup/verify_formal_pipeline.py --mode train --require-reattestation --formal-assets $formal_assets --corpus-ready $marker --pre-smoke"
   "${launcher[*]} --config configs/train/cluster_8g_smoke.yaml"
   "${launcher[*]} --config configs/train/cluster_8g_smoke_fresh10.yaml"
   "${launcher[*]} --config configs/train/cluster_8g_smoke_resume20.yaml --resume $EDITMGT_OUTPUT_ROOT/fixed200k-smoke-resume-fresh10/checkpoint-10"
