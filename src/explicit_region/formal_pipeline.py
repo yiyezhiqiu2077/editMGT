@@ -284,6 +284,8 @@ def verify_pipeline_mode(*, mode, formal_assets, corpus_ready, current_git,
     """One provenance implementation; training never depends on selection."""
     if mode not in ('train', 'select'):
         raise ValueError('unknown verification mode')
+    if mode == 'select' and pre_smoke:
+        raise RuntimeError('FORMAL_PIPELINE_NOT_READY: selection cannot bypass the smoke gate')
     if pre_smoke:
         verify_formal_asset_corpus(formal_assets, corpus_ready, current_git)
         ready = {'world_size': None}

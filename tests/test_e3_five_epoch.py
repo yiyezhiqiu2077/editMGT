@@ -77,6 +77,13 @@ def test_e3_gate_refuses_corpus_without_current_code_reattestation(tmp_path, mon
             corpus_ready=corpus, current_git='b' * 40, require_reattestation=True)
 
 
+def test_selection_cannot_use_pre_smoke_shortcut():
+    from src.explicit_region.formal_pipeline import verify_pipeline_mode
+    with pytest.raises(RuntimeError, match='selection cannot bypass the smoke gate'):
+        verify_pipeline_mode(mode='select', pre_smoke=True, formal_assets='unused',
+                             corpus_ready='unused', current_git='b' * 40)
+
+
 def test_five_epoch_budget_scheduler_and_exact_ten_checkpoints():
     config = _load_unexpanded(ROOT / 'configs/train/cluster_8g_e3.yaml')
     resolved = verify(config)
