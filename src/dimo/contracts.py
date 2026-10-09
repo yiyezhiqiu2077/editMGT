@@ -97,6 +97,15 @@ def teacher_bundle_fingerprint(
 ) -> dict[str, Any]:
     """Fingerprint every artifact that defines the teacher's behavior."""
     root = Path(checkpoint).expanduser().resolve()
+    provisional = root / 'dimo_provisional_teacher_manifest.json'
+    if provisional.is_file() and not formal:
+        from .provisional_teacher import load_provisional_teacher
+        contract = load_provisional_teacher(root, expected_base_identity=base_model_identity)
+        return {'base_model_identity': base_model_identity,
+                'provisional_manifest_sha256': _sha256(provisional),
+                'artifact_sha256': contract.manifest['artifact_sha256'],
+                'bundle_sha256': contract.checkpoint_hash,
+                'formal_teacher': False, 'dev_only': True}
     result: dict[str, Any] = {"base_model_identity": base_model_identity}
     missing = []
     for field, filename in TEACHER_BUNDLE_FILES.items():
@@ -179,9 +188,20 @@ def enforce_run_guard(
     prep_smoke: bool,
     max_optimizer_steps: int,
     formal_ready: bool,
+    experiment_mode: str | None = None,
+    world_size: int = 1,
 ) -> dict[str, bool]:
     if formal_ready or DIMO_EDIT_FORMAL_READY:
         raise RuntimeError("DIMO_EDIT_FORMAL_READY must remain false before teacher selection")
+    if experiment_mode is not None:
+        if experiment_mode != 'pilot_8gpu' or prep_smoke:
+            raise RuntimeError('INVALID_OR_AMBIGUOUS_DIMO_EXPERIMENT_MODE')
+        if (world_size != 8 or max_optimizer_steps <= 0 or contract is None
+                or contract.manifest.get('schema') != 'dimo-provisional-teacher-v1'
+                or contract.formal_teacher or contract.manifest.get('dev_only') is not True):
+            raise RuntimeError('PILOT_REQUIRES_EIGHT_RANKS_AND_PROVISIONAL_TEACHER')
+        return {'formal_teacher': False, 'dev_only': True, 'PILOT_ONLY': True,
+                'TEACHER_QUALITY_NOT_VALIDATED': True}
     if prep_smoke:
         if max_optimizer_steps > 2:
             raise RuntimeError("PREP_SMOKE_MAX_STEPS_EXCEEDED")

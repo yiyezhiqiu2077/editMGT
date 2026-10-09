@@ -190,7 +190,7 @@ def initialize_shared_model_roles(
     import json
     from pathlib import Path
 
-    from peft.utils import set_peft_model_state_dict
+    from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
     from safetensors.torch import load_file
 
     from .roles import DiMOModelRoles
@@ -205,6 +205,11 @@ def initialize_shared_model_roles(
     result = set_peft_model_state_dict(base_model, teacher_state, adapter_name="teacher")
     if getattr(result, "unexpected_keys", None):
         raise RuntimeError(f"unexpected teacher LoRA keys: {result.unexpected_keys}")
+    loaded = get_peft_model_state_dict(base_model, adapter_name='teacher')
+    if (set(loaded) != set(teacher_state) or any(
+            not torch.equal(value.detach().cpu(), teacher_state[name].to(dtype=value.dtype))
+            for name, value in loaded.items())):
+        raise RuntimeError('teacher LoRA was not loaded exactly into the shared backbone')
     region_state = load_file(root / "mask_conditioning.safetensors")["edit_region_embedding"]
     if region_state.shape != base_model.edit_region_embedding.shape:
         raise RuntimeError("teacher region embedding shape is incompatible")

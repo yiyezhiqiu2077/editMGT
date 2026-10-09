@@ -17,7 +17,7 @@ from PIL import Image
 import torch
 
 from src.dataset_utils import encode_prompt, tokenize_prompt
-from src.dimo.checkpoint import validate_inference_checkpoint
+from src.dimo.checkpoint import read_dimo_state, validate_inference_checkpoint
 from src.dimo.contracts import (
     DIMO_MODEL_ROLES_V11, DIMO_UPSTREAM_COMMIT, build_inference_fingerprint,
     released_base_model_identity, teacher_bundle_fingerprint,
@@ -78,7 +78,7 @@ def main() -> None:
     roles = initialize_shared_model_roles(
         components.transformer, args.teacher_checkpoint, model_roles=DIMO_MODEL_ROLES_V11
     )
-    state = torch.load(Path(args.student_checkpoint) / "training_state.pt", map_location="cpu")
+    state = read_dimo_state(args.student_checkpoint)
     validate_inference_checkpoint(
         state,
         expected_teacher_bundle_fingerprint=teacher_bundle,
@@ -172,6 +172,8 @@ def main() -> None:
         "nan_inf_count": int((~torch.isfinite(output.logits)).sum()) + int((~torch.isfinite(decoded)).sum()),
         "output": str(destination.resolve()),
         "DIMO_EDIT_FORMAL_READY": False,
+        'dev_only': state.get('dev_only', True),
+        'formal_teacher': False,
     }
     destination.with_suffix(destination.suffix + ".json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"

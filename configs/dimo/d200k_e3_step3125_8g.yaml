@@ -1,0 +1,9 @@
+extends: pilot_e3_step3125_8g.yaml
+experiment: DiMO-E3-Step3125-D200K8G-Exploratory
+output_dir: ${DIMO_OUTPUT_ROOT}/d200k-e3-step3125-8g
+epochs: 1
+max_optimizer_steps: 25000
+optimizer:
+  horizon_steps: 25000
+checkpoint_steps: [2500, 5000, 7500, 10000, 12500, 15000, 17500, 20000, 22500, 25000]
+rank_consistency_steps: [0, 1, 20, 100, 25000]

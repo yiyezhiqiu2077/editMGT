@@ -1,0 +1,42 @@
+extends: base.yaml
+experiment: DiMO-E3-Step3125-Pilot8G
+experiment_mode: pilot_8gpu
+dev_only: true
+formal_ready: false
+teacher_checkpoint: ${DIMO_TEACHER_CHECKPOINT}
+model:
+  repo_or_root: ${EDITMGT_MODEL_ROOT}
+data:
+  name: fixed_200k
+  manifest: ${DIMO_D200K_MANIFEST}
+  corpus_ready: ${DIMO_CORPUS_READY}
+  verify_hashes_at_read: true
+  roots:
+    magicbrush: ${MAGICBRUSH_ROOT}
+    crispedit: ${CRISPEDIT_ROOT}
+    scaleedit: ${SCALEEDIT_ROOT}
+    interedit: ${INTEREDIT_ROOT}
+output_dir: ${DIMO_OUTPUT_ROOT}/pilot-e3-step3125-8g
+distributed:
+  world_size: 8
+  backend: nccl
+  gradient_sync: explicit_allreduce
+  bucket_bytes: 16777216
+  minimum_free_memory_gib: 24
+batch_per_gpu: 1
+gradient_accumulation: 1
+num_workers: 0
+epochs: 1
+seed: 42
+max_optimizer_steps: 500
+checkpoint_steps: [0, 50, 100, 250, 500]
+rank_consistency_steps: [0, 1, 20, 100, 500]
+lora_scope: both
+geometry: {max_resample_attempts: 8, minimum_mask_retention: 0.75}
+token_mask: {mode: any_overlap, coverage_threshold: 0.5, dilation_tokens: 0, minimum_edit_tokens: 1}
+optimizer:
+  student_learning_rate: 0.000001
+  auxiliary_learning_rate: 0.000001
+  scheduler: constant_with_warmup
+  warmup_steps: 0
+  horizon_steps: 500

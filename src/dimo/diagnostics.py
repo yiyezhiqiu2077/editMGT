@@ -57,7 +57,7 @@ def run_nonzero_signal_diagnostic(
     if epsilon <= 0:
         raise ValueError("diagnostic epsilon must be positive")
     cpu_rng = torch.get_rng_state()
-    cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None
+    cuda_rng = torch.cuda.get_rng_state(torch.cuda.current_device()) if torch.cuda.is_initialized() else None
     auxiliary_parameters = roles.role_named_parameters("auxiliary")
     adapter_items = [(name, value) for name, value in auxiliary_parameters if name != "edit_region_embedding"]
     if not adapter_items:
@@ -133,4 +133,4 @@ def run_nonzero_signal_diagnostic(
             value.grad = None
         torch.set_rng_state(cpu_rng)
         if cuda_rng is not None:
-            torch.cuda.set_rng_state_all(cuda_rng)
+            torch.cuda.set_rng_state(cuda_rng, device=torch.cuda.current_device())

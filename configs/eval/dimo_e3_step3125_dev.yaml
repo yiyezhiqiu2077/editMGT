@@ -1,0 +1,7 @@
+extends: e3_periodic_probe.yaml
+# Exploratory DEV comparison only; neither CFG nor checkpoint is selected.
+embedding_models: {}
+dimo_student_cfg: 1.0
+geometry_seed: 42
+dev_only: true
+formal_teacher: false

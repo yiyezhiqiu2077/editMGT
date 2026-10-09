@@ -1,0 +1,8 @@
+extends: pilot_e3_step3125_8g.yaml
+experiment: DiMO-E3-Step3125-Smoke8G
+output_dir: ${DIMO_OUTPUT_ROOT}/smoke-e3-step3125-8g
+max_optimizer_steps: 20
+optimizer:
+  horizon_steps: 20
+checkpoint_steps: [0, 10, 20]
+rank_consistency_steps: [0, 1, 20]

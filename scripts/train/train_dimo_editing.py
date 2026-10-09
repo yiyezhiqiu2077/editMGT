@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Guarded one-GPU Region-DiMO preparation trainer.
-
-The formal gate is intentionally impossible to pass in this milestone. The
-only executable mode is ``--prep-smoke`` and it is limited to two complete
-student+auxiliary+EMA steps.
-"""
+"""Two-step prep smoke or a separately guarded exploratory eight-rank run."""
 
 from __future__ import annotations
 
@@ -166,6 +161,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--prep-smoke", action="store_true")
+    parser.add_argument('--experiment-mode', choices=['pilot_8gpu'])
     parser.add_argument("--teacher-checkpoint")
     parser.add_argument("--resume")
     parser.add_argument("--max-optimizer-steps", type=int)
@@ -179,6 +175,11 @@ def main() -> None:
     config = load_config(args.config)
     if args.max_optimizer_steps is not None:
         config["max_optimizer_steps"] = args.max_optimizer_steps
+    experiment_mode = args.experiment_mode or config.get('experiment_mode')
+    if experiment_mode is not None:
+        from src.dimo.pilot import run_pilot
+        run_pilot(args, config, prepare_batch=prepare_batch)
+        return
     teacher_path = resolve_teacher_checkpoint(config.get("teacher_checkpoint"))
     contract = None
     if teacher_path and (Path(teacher_path) / "dimo_teacher_manifest.json").is_file():

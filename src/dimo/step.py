@@ -54,6 +54,7 @@ def complete_dimo_step(
     mask_token_id: int,
     codebook_size: int,
     config: Mapping[str, object],
+    gradient_sync=None,
 ) -> tuple[dict[str, object], dict[str, torch.Tensor]]:
     """Perform one checkpointable same-batch step and return diagnostics/state."""
     started = time.perf_counter()
@@ -152,6 +153,8 @@ def complete_dimo_step(
     # must see the same logical adapter as the original forward.
     roles.activate_adapter("student")
     student_loss.backward()
+    if gradient_sync is not None:
+        gradient_sync('student')
     student_grad = _role_grad_norm(roles, "student")
     gradient_norm = float(gradient.detach().float().norm())
     if (
@@ -187,6 +190,8 @@ def complete_dimo_step(
     )
     roles.activate_adapter("auxiliary")
     aux_loss.backward()
+    if gradient_sync is not None:
+        gradient_sync('auxiliary')
     aux_grad = _role_grad_norm(roles, "auxiliary")
     if aux_grad == 0 or _role_grad_norm(roles, "teacher") != 0 or _role_grad_norm(roles, "student") != 0:
         raise RuntimeError("auxiliary backward violated role gradient isolation")
