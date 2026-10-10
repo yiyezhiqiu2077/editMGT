@@ -1,0 +1,6 @@
+extends: dense_dev.yaml
+# Same CFG5/12-step diagnostic protocol, without optional DINO/CLIP assets.
+guidance_scale: 5.0
+generation_seeds: [0]
+inference_timestep_mode: roi_relative
+bootstrap: {seed: 42, resamples: 1000, unit: sample_after_seed_mean}

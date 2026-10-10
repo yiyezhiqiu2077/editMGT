@@ -144,3 +144,14 @@ def test_selection_binds_inference_protocol(tmp_path):
     config.write_text("steps: 16\nguidance_scale: 10\n")
     with pytest.raises(RuntimeError, match="IMMUTABLE"):
         selection_registration(plan, tmp_path / "prereg.json")
+
+
+def test_dense_periodic_probe_needs_no_optional_embedding_assets(monkeypatch):
+    from src.explicit_region.config import load_config, _load_unexpanded
+    monkeypatch.delenv("DINO_MODEL_ROOT", raising=False)
+    monkeypatch.delenv("CLIP_MODEL_ROOT", raising=False)
+    config = load_config("configs/eval/dense_periodic_probe.yaml")
+    assert config["embedding_models"] == {}
+    assert (config["guidance_scale"], config["steps"], config["generation_seeds"]) == (5, 12, [0])
+    assert config["inference_timestep_mode"] == "roi_relative"
+    assert _load_unexpanded(Path("configs/train/dense_d200k_5epoch.yaml"))["validation"]["inference_config"] == "configs/eval/dense_periodic_probe.yaml"

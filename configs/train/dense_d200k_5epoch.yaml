@@ -19,4 +19,4 @@ dense:
   minimum_free_vram_gib: 38
 validation:
   interval_steps: 3125
-  inference_config: configs/eval/e3_periodic_probe.yaml
+  inference_config: configs/eval/dense_periodic_probe.yaml
