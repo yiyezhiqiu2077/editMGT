@@ -170,6 +170,23 @@ E0-region / E1 / E2 / E4 保留为后续 ablation，当前 E3-only 正式训练�
 一致性标准预先固定为 bitwise exact，不在失败后放宽容差。
 正式 D200K、正式 DEV selection 和 Region-DiMO 长训在本地均为 `NOT_RUN`；GPU 状态以实际结果文件为准，不能把 CPU PASS 复用为 GPU PASS。
 
+2026-10-10 本地验收：真实八张 A100 40GB 上 fresh16 / fresh8→resume16 通过，完整权重、optimizer、scheduler、sampler、各 rank RNG、QualityGate 和样本 trace 均 bitwise exact。
+训练执行 SHA 为 `b5f7be522cfe0f8c40fe95e7d618a46d99d2166e`；后续提交补充评测门禁、独立 Dense probe 配置和本文档，不改变训练数学。
+可训练及 optimizer 参数均为 1,009,307,648，全部 FP32，无 LoRA、结构性 unused 或 encoder gradient。
+首次更新 peak allocated 21.26 GiB；最高 allocated / reserved 为 28.08 / 28.63 GiB；普通 step 中位数7.11秒，不含 checkpoint I/O。
+
+本地证据路径由交付报告记录，分别记作 `$LOCAL_DENSE_SMOKE_ROOT` 和 `$LOCAL_DENSE_AUX_ROOT`：
+
+- `$LOCAL_DENSE_SMOKE_ROOT/DENSE_SMOKE.json`：真实 Dense 训练及严格恢复。
+- `$LOCAL_DENSE_AUX_ROOT/real-mini-dev/`：固定 DEV32、CFG10、12 steps、seed0，四模型128张图，指标/配对CI/固定案例；仅 diagnostic，selection 为 PENDING。
+- `$LOCAL_DENSE_AUX_ROOT/in-memory-probe-final/IN_MEMORY_PROBE.json`：真实 DEV8、CFG5 内存推理，权重、RNG、scheduler 和训练模式不受影响。
+- `$LOCAL_DENSE_AUX_ROOT/DIMO_GPU_RESUME.json` 和 `dimo-one-step/DIMO_ONE_STEP.json`：真实八卡 DiMO 两步及严格恢复、四数据集 raw/EMA 八张单步图，finite 和 token-lock 检查通过。
+
+已实际导出并验证 Mini16 provisional Teacher。Selected export 的门禁由 CPU 用例覆盖，真实 selected Teacher 尚未产生。
+Smoke 仅16步、仍在200步 warmup 内，不能据此判断 Dense 学习质量，也未覆盖完整 QualityGate baseline 窗口或正式 DEV128。
+首次开发 Smoke 暴露的 DataLoader generator 重复推进问题已修复；这里只采用修复后的严格恢复证明，不放宽容差。
+配置文件 identity 可用 `sha256sum configs/train/dense_d200k_5epoch.yaml` 检查，实际 resolved config/fingerprint 保存在各运行的 `run_provenance.json`。
+
 ### 集群环境
 
 先申请独占八张 A100，并保证 checkpoint 磁盘容量。每个 Dense checkpoint 约需完整 FP32 权重与两份 AdamW moment；十个 checkpoint 及原子写入临时目录需预留足够空间，建议不少于 160GB，不含数据、评测图像和 Teacher。
@@ -239,6 +256,7 @@ Dense Smoke 证明不能借用 LoRA 的 smoke PASS。集群正式任务本身在
 显存记录包含加载、DDP 包装、首次 forward/backward 和 optimizer 更新后的 allocated/reserved/peak。
 低 CE 不能证明编辑能力提升；参数和恢复正常也不自动完成 DEV selection。
 训练期 DEV128 每3125步使用 CFG5 diagnostic，不声明最优 CFG。
+使用 [dense_periodic_probe.yaml](../configs/eval/dense_periodic_probe.yaml)，不依赖可选 DINO/CLIP 资产；旧 LoRA probe 配置不变。
 
 ### 本地真实 Mini-512 Smoke
 
@@ -329,7 +347,7 @@ uv run torchrun --nproc_per_node=8 --master_port=29672 scripts/train/train_dense
 # 可用 --stop-at-global-step 1 后，再以相同配置 --resume checkpoint-1 恢复到2
 ```
 
-两种 prep 入口 checkpoint 格式不同，不能相互 resume。正式八卡 DiMO 长训保持关闭，必须先实际验证跨 rank 同步、resume、方法与 teacher selection；只有 YAML 或 CPU toy 不代表 GPU PASS。
+两种 prep 入口 checkpoint 格式不同，不能相互 resume。八卡 prep 的跨 rank 同步和恢复已通过本地真实测试，但正式八卡 DiMO 长训仍保持关闭，尚需正式 teacher selection 与独立长训方案；只有 YAML 或 CPU toy 不代表 GPU PASS。
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
