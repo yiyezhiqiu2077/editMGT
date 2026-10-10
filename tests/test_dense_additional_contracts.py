@@ -94,3 +94,53 @@ def test_dense_epoch_iterator_replays_generator_exactly():
         generator=resumed_generator, pin_memory=False, resume_epoch_start_rng=fresh.epoch_start_rng)
     assert [int(x) for x in resumed] == full[32:]
     assert torch.equal(resumed_generator.get_state(), expected_rng)
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_dense_resume_at_epoch_boundary(workers):
+    from src.explicit_region.dense_runtime import DenseEpochLoader
+    from src.explicit_region.epoch_sampler import DeterministicEpochSampler
+    class Dataset(torch.utils.data.Dataset):
+        def __len__(self): return 64
+        def __getitem__(self, index): return index + self.epoch * 1000
+        def set_epoch(self, epoch): self.epoch = epoch
+    def sampler(cursor):
+        return DeterministicEpochSampler(64, base_seed=42, epoch=0, train_manifest_sha256="d" * 64,
+                                         samples_consumed_in_epoch=cursor)
+    generator = torch.Generator().manual_seed(99)
+    fresh = DenseEpochLoader(Dataset(), sampler(0), epochs=2, batch_size=1,
+        generator=generator, num_workers=workers, pin_memory=False)
+    iterator = iter(fresh)
+    for _ in range(64): next(iterator)
+    checkpoint_rng, epoch_start = generator.get_state(), fresh.epoch_start_rng
+    expected = [int(x) for x in iterator]
+    expected_rng = generator.get_state()
+    resumed_generator = torch.Generator().manual_seed(99)
+    resumed_generator.set_state(checkpoint_rng)
+    resumed = DenseEpochLoader(Dataset(), sampler(64), epochs=2, batch_size=1,
+        generator=resumed_generator, num_workers=workers, pin_memory=False, resume_epoch_start_rng=epoch_start)
+    assert [int(x) for x in resumed] == expected
+    assert torch.equal(resumed_generator.get_state(), expected_rng)
+
+
+@pytest.mark.parametrize("change", [{"primary": "crispedit"}, {"baseline": "E0-official"},
+                                    {"maximum_outside_lpips_degradation": float("inf")},
+                                    {"minimum_inside_lpips_improvement": float("nan")}])
+def test_selection_rejects_changed_rule_or_nonfinite_threshold(tmp_path, change):
+    plan = {"selection": {"status": "PREREGISTERED", "maximum_outside_lpips_degradation": .01,
+                           "minimum_inside_lpips_improvement": .01, **change}}
+    with pytest.raises(RuntimeError):
+        selection_registration(plan, tmp_path / "prereg.json")
+
+
+def test_selection_binds_inference_protocol(tmp_path):
+    manifest = tmp_path / "dev.jsonl"; manifest.write_text("{}\n")
+    config = tmp_path / "eval.yaml"; config.write_text("steps: 12\nguidance_scale: 10\n")
+    plan = {"candidate_steps": CANDIDATES, "inference_config": str(config),
+        "datasets": [{"name": "magicbrush", "manifest": str(manifest)}],
+        "selection": {"status": "PREREGISTERED", "maximum_outside_lpips_degradation": .01,
+                      "minimum_inside_lpips_improvement": .01}}
+    selection_registration(plan, tmp_path / "prereg.json")
+    config.write_text("steps: 16\nguidance_scale: 10\n")
+    with pytest.raises(RuntimeError, match="IMMUTABLE"):
+        selection_registration(plan, tmp_path / "prereg.json")

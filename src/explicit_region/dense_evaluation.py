@@ -2,6 +2,7 @@
 from __future__ import annotations
 import csv
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -19,12 +20,20 @@ CANDIDATES = list(range(3125, 31251, 3125))
 def selection_registration(plan, output):
     rules = plan["selection"]
     required = ("maximum_outside_lpips_degradation", "minimum_inside_lpips_improvement")
-    if rules.get("status") != "PREREGISTERED" or any(not isinstance(rules.get(k), (int, float)) or rules[k] < 0 for k in required):
+    if rules.get("status") != "PREREGISTERED" or any(type(rules.get(k)) not in (int, float) or not math.isfinite(rules[k]) or rules[k] < 0 for k in required):
         raise RuntimeError("DENSE_SELECTION_PENDING: explicitly define thresholds before evaluation")
+    for key, expected in {"primary": "magicbrush", "baseline": "E0-region",
+                          "rule": "minimum_inside_lpips_subject_to_preservation",
+                          "tie_break": "earlier_step"}.items():
+        if rules.get(key, expected) != expected:
+            raise RuntimeError(f"DENSE_SELECTION_RULE_MISMATCH: {key}")
     if plan.get("candidate_steps") != CANDIDATES:
         raise RuntimeError("DENSE_SELECTION_CANDIDATE_SET_MISMATCH")
     payload = {"schema": "dense-selection-prereg-v1", "plan": plan,
                "validation_sha256": {r["name"]: sha256_file(r["manifest"]) for r in plan["datasets"]}}
+    if plan.get("inference_config"):
+        from .config import load_config
+        payload["inference_protocol_sha256"] = recipe_fingerprint(load_config(plan["inference_config"]))
     result = payload | {"sha256": recipe_fingerprint(payload)}
     if Path(output).exists():
         if json.loads(Path(output).read_text()) != result:

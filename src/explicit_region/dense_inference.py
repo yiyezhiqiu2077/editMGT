@@ -1,6 +1,6 @@
 """FP32 Dense Transformer + BF16-autocast inference, with token-lock checks."""
 from __future__ import annotations
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 import copy
 import functools
 import json
@@ -78,10 +78,15 @@ def inference_safety(pipe):
         reference = kwargs.get("reference_image_hidden_states")
         if region is None or reference is None:
             raise RuntimeError("DENSE_INFERENCE_REGION_OR_REFERENCE_MISSING")
+        hidden = kwargs.get("hidden_states")
+        if hidden is None or hidden.dtype not in (torch.int32, torch.int64) or reference.dtype != hidden.dtype:
+            raise RuntimeError("DENSE_INFERENCE_TOKEN_DTYPE_MISMATCH")
         captured["region"], captured["reference"] = region.bool(), reference
     def outputs(module, args, output):
         if not isinstance(output, torch.Tensor) or not bool(torch.isfinite(output).all()):
             raise RuntimeError("DENSE_INFERENCE_NONFINITE_LOGITS")
+        if output.dtype not in (torch.float32, torch.bfloat16):
+            raise RuntimeError("DENSE_INFERENCE_LOGIT_DTYPE_MISMATCH")
     pre = pipe.transformer.register_forward_pre_hook(inputs, with_kwargs=True)
     post = pipe.transformer.register_forward_hook(outputs)
     original = pipe.scheduler.step
@@ -136,7 +141,6 @@ def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, c
     out.mkdir(parents=True, exist_ok=True)
     records = []
     device = torch.device(device)
-    autocast = lambda: torch.autocast(device_type=device.type, dtype=torch.bfloat16)
     with inference_safety(pipe):
         for i in range(min(len(ds), count if count is not None else len(ds))):
             item = ds[i]
@@ -149,12 +153,11 @@ def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, c
                 started = time.perf_counter()
                 # Autocast only the Transformer, never VQ encode/quantize/decode.
                 # FP32 VQ token assignments must match the original evaluator.
-                with nullcontext():
-                    result = pipe(prompt=item["instruction_en"], reference_image=source, mask_image=mask,
-                        height=config["resolution"], width=config["resolution"],
-                        num_inference_steps=config["steps"], guidance_scale=config["guidance_scale"],
-                        reference_strength=config["reference_strength"], generator=generator,
-                        lora_scope="both", inference_timestep_mode=timestep_mode).images[0]
+                result = pipe(prompt=item["instruction_en"], reference_image=source, mask_image=mask,
+                    height=config["resolution"], width=config["resolution"],
+                    num_inference_steps=config["steps"], guidance_scale=config["guidance_scale"],
+                    reference_strength=config["reference_strength"], generator=generator,
+                    lora_scope="both", inference_timestep_mode=timestep_mode).images[0]
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 elapsed = time.perf_counter() - started
