@@ -29,9 +29,8 @@ from src.explicit_region.dense_checkpoint import (save_dense_checkpoint, read_de
                                                  restore_dense_resume, write_json)
 from src.explicit_region.dense_runtime import (validate_dense_config, audit_released_fp32,
     check_direct_initialization, trainable_report, assert_rank_parameters, gradient_report,
-    UpdateSample, DenseQualityGate, memory_record, collective_require)
-from src.explicit_region.epoch_sampler import (DeterministicEpochSampler, EpochConsumptionTracker,
-                                              MultiEpochFixedLoader)
+    UpdateSample, DenseQualityGate, memory_record, collective_require, DenseEpochLoader)
+from src.explicit_region.epoch_sampler import DeterministicEpochSampler, EpochConsumptionTracker
 from src.explicit_region.fixed_corpus import verify_corpus_ready, verify_mini_corpus_ready
 from src.explicit_region.fixed_dataset import FixedCorpusDataset
 from src.explicit_region.modeling import load_released_components
@@ -80,9 +79,9 @@ def build_loader(config, accelerator, resume=None):
         if resume["global_optimizer_step"] * global_batch != resume["committed_global_sample_count"]:
             raise RuntimeError("DENSE_RESUME_STEP_CURSOR_MISMATCH")
     generator = torch.Generator().manual_seed(config["seed"] + 10000)
-    loader = MultiEpochFixedLoader(dataset, sampler, epochs=config["epochs"],
+    loader = DenseEpochLoader(dataset, sampler, epochs=config["epochs"],
         batch_size=config["batch_per_gpu"], num_workers=config.get("num_workers", 0),
-        generator=generator)
+        generator=generator, resume_epoch_start_rng=resume.get("loader_epoch_start_rng") if resume else None)
     tracker = EpochConsumptionTracker(dataset.rows, sampler, config["batch_per_gpu"],
                                        config["gradient_accumulation"], state)
     return dataset, sampler, loader, generator, tracker
@@ -247,7 +246,8 @@ def main():
             save_dense_checkpoint(output / f"checkpoint-{step}", model=model, optimizer=optimizer,
                 scheduler=scheduler, fingerprint_payload=payload, global_optimizer_step=step,
                 committed_global_sample_count=committed, sampler_state=state, quality_state=gate.state_dict(),
-                loader_generator=generator, max_shard_bytes=config["dense"]["max_shard_bytes"])
+                loader_generator=generator, loader_epoch_start_rng=loader.epoch_start_rng,
+                max_shard_bytes=config["dense"]["max_shard_bytes"])
         if validation_due:
             from src.explicit_region.dense_inference import periodic_dense_validation
             accelerator.wait_for_everyone()

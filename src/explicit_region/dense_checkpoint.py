@@ -79,6 +79,7 @@ def verify_dense_checkpoint(root, *, inference_only=True, expected_fingerprint=N
 def save_dense_checkpoint(root, *, model, fingerprint_payload, optimizer=None, scheduler=None,
                           global_optimizer_step=0, committed_global_sample_count=0,
                           sampler_state=None, quality_state=None, loader_generator=None,
+                          loader_epoch_start_rng=None,
                           max_shard_bytes=512 * 1024**2):
     """Collective call at successful update boundaries; publish only rank0.
 
@@ -145,6 +146,7 @@ def save_dense_checkpoint(root, *, model, fingerprint_payload, optimizer=None, s
                             "global_optimizer_step": int(global_optimizer_step),
                             "committed_global_sample_count": int(committed_global_sample_count),
                             "loader_generator": loader_generator.get_state() if loader_generator is not None else None,
+                            "loader_epoch_start_rng": loader_epoch_start_rng,
                             "fingerprint": recipe_fingerprint(fingerprint_payload)},
                            temporary / "training_state.pt")
             ledger = {p.name: sha256_file(p) for p in temporary.iterdir()}

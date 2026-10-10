@@ -72,3 +72,25 @@ def test_old_lora_entry_unchanged():
     import hashlib
     base = subprocess.check_output(["git", "show", "36dff5ff9ad10cee3d3910eb980932ec0a251b62:scripts/train/train_explicit_region.py"])
     assert sha256_file("scripts/train/train_explicit_region.py") == hashlib.sha256(base).hexdigest()
+
+
+def test_dense_epoch_iterator_replays_generator_exactly():
+    from src.explicit_region.dense_runtime import DenseEpochLoader
+    from src.explicit_region.epoch_sampler import DeterministicEpochSampler
+    class Dataset(torch.utils.data.Dataset):
+        def __len__(self): return 64
+        def __getitem__(self, index): return index
+        def set_epoch(self, epoch): self.epoch = epoch
+    def sampler(cursor):
+        return DeterministicEpochSampler(64, base_seed=42, epoch=0, train_manifest_sha256="d" * 64,
+                                         samples_consumed_in_epoch=cursor)
+    generator = torch.Generator().manual_seed(99)
+    fresh = DenseEpochLoader(Dataset(), sampler(0), epochs=1, batch_size=1, generator=generator, pin_memory=False)
+    full = [int(x) for x in fresh]
+    expected_rng = generator.get_state()
+    resumed_generator = torch.Generator().manual_seed(99)
+    resumed_generator.set_state(expected_rng)
+    resumed = DenseEpochLoader(Dataset(), sampler(32), epochs=1, batch_size=1,
+        generator=resumed_generator, pin_memory=False, resume_epoch_start_rng=fresh.epoch_start_rng)
+    assert [int(x) for x in resumed] == full[32:]
+    assert torch.equal(resumed_generator.get_state(), expected_rng)

@@ -14,6 +14,29 @@ from .checkpoint import recipe_fingerprint
 from .contracts import sha256_file
 from .dense_checkpoint import write_json
 from .quality import QualityGate
+from .epoch_sampler import MultiEpochFixedLoader
+from torch.utils.data import DataLoader
+
+
+class DenseEpochLoader(MultiEpochFixedLoader):
+    """Replay the current epoch's iterator seed without advancing it twice."""
+    def __init__(self, *args, resume_epoch_start_rng=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.resume_epoch_start_rng = resume_epoch_start_rng
+        self.epoch_start_rng = None
+
+    def __iter__(self):
+        generator = self.kwargs["generator"]
+        for epoch in range(self.initial_epoch, self.epochs):
+            cursor = self.initial_cursor if epoch == self.initial_epoch else 0
+            self.sampler.reset_epoch(epoch, cursor)
+            self.dataset.set_epoch(epoch)
+            if epoch == self.initial_epoch and cursor:
+                if self.resume_epoch_start_rng is None:
+                    raise RuntimeError("DENSE_RESUME_LOADER_EPOCH_RNG_MISSING")
+                generator.set_state(self.resume_epoch_start_rng)
+            self.epoch_start_rng = generator.get_state()
+            yield from DataLoader(self.dataset, sampler=self.sampler, batch_size=self.batch_size, **self.kwargs)
 
 
 def validate_dense_config(config, *, formal=False):
