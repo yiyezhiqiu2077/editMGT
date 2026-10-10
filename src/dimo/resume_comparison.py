@@ -50,5 +50,6 @@ def compare_complete_checkpoints(fresh, resumed):
     if identity["formal"] and identity["world_size"] != 8:
         raise RuntimeError("RESUME_COMPARE_FORMAL_WORLD_SIZE_MISMATCH")
     return {"status": "PASS", "equivalence": "bitwise_exact", "checks": checked,
-            "evidence": "REAL_8_GPU" if identity["formal"] else "CPU_SYNTHETIC",
+            "evidence": 'REAL_4_A800' if identity.get('experiment_mode')=='magicbrush_exploratory' else (
+                "REAL_8_GPU" if identity["formal"] else "CPU_SYNTHETIC"),
             "world_size": identity["world_size"]}

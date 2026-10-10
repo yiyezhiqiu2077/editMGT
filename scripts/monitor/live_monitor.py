@@ -29,6 +29,7 @@ def main():
     p.add_argument("--once", action="store_true")
     p.add_argument("--retry-pending", action="store_true")
     p.add_argument("--max-pending", type=int, default=128)
+    p.add_argument('--token-file',help='Optional local credentials, read only by the independent CPU monitor')
     a = p.parse_args()
     if a.max_pending <= 0:
         p.error("max-pending must be positive")
@@ -38,6 +39,8 @@ def main():
         monitor.state["attempts"] = {}
     while True:
         try:
+            if publisher is not None and a.token_file and Path(a.token_file).is_file():
+                publisher.token=Path(a.token_file).read_text().strip()
             monitor.poll()
         except Exception as exc:
             print(f"MONITOR_LOCAL_DIAGNOSTIC: {type(exc).__name__}", file=sys.stderr, flush=True)

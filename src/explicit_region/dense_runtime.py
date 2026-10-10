@@ -31,7 +31,7 @@ class DenseEpochLoader(MultiEpochFixedLoader):
             cursor = self.initial_cursor if epoch == self.initial_epoch else 0
             self.sampler.reset_epoch(epoch, cursor)
             self.dataset.set_epoch(epoch)
-            if epoch == self.initial_epoch and cursor:
+            if epoch == self.initial_epoch and (cursor or self.resume_epoch_start_rng is not None):
                 if self.resume_epoch_start_rng is None:
                     raise RuntimeError("DENSE_RESUME_LOADER_EPOCH_RNG_MISSING")
                 generator.set_state(self.resume_epoch_start_rng)
@@ -40,8 +40,10 @@ class DenseEpochLoader(MultiEpochFixedLoader):
 
 
 def validate_dense_config(config, *, formal=False):
+    from .magicbrush_experiment import is_magicbrush, validate_magicbrush_budget
+    magic = is_magicbrush(config)
     expected = {"training_mode": "full_transformer", "precision": "bf16", "resolution": 1024,
-                "batch_per_gpu": 1, "gradient_accumulation": 4, "scheduler_horizon_steps": 31250,
+                "batch_per_gpu": 1, "gradient_accumulation": 4, "scheduler_horizon_steps": 10*config['data']['expected_rows']//16 if magic else 31250,
                 "warmup_steps": 200, "gradient_checkpointing": True, "attention_backend": "math_sdp"}
     for key, value in expected.items():
         if config.get(key) != value:
@@ -65,6 +67,9 @@ def validate_dense_config(config, *, formal=False):
         raise RuntimeError("DENSE_TOKEN_MASK_MISMATCH")
     if formal and (config["data"]["name"] != "fixed_200k" or config["epochs"] != 5 or config["max_optimizer_steps"] != 31250):
         raise RuntimeError("DENSE_FORMAL_BUDGET_MISMATCH")
+    if magic:
+        if formal: raise RuntimeError('MAGICBRUSH_CANNOT_USE_D200K_FORMAL_GATE')
+        validate_magicbrush_budget(config, 'sft')
     return {"status": "PASS", "config_sha256": recipe_fingerprint(config)}
 
 
@@ -208,6 +213,8 @@ class DenseQualityGate:
 
     def update(self, step, *, loss, max_abs_logit, clip_applied, update_ratio=None, finite_parameters=None):
         import math
+        if self.config.get('enabled') is False:
+            return math.isfinite(loss) and math.isfinite(max_abs_logit) and finite_parameters is not False
         if finite_parameters is False or (update_ratio is not None and
                 (not math.isfinite(update_ratio) or update_ratio > self.config.get("max_update_ratio", float("inf")))):
             self.gate.status, self.gate.reason = "QUALITY_FAILED", "dense_sampled_update_or_parameters"

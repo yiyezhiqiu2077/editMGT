@@ -26,16 +26,21 @@ def build_report(roots, output, *, stage="all", max_archive_bytes=64*1024**2):
                 continue
             root = Path(root)
             folder = working / name; folder.mkdir()
-            stage_root = root / "train" if name == "e3" and (root / "train").is_dir() else root
+            stage_root = root / "train" if (root / "train").is_dir() else root
             log = stage_root / ("train_metrics.jsonl" if name == "e3" else "metrics.jsonl")
             rows = read_committed(log, name)
             summary.append(f"{name}: committed step {rows[-1]['global_step'] if rows else 'NOT_AVAILABLE'}")
             files = [log]
+            for pattern in ('REPORT.md','TEACHER_SELECTION.json','MERGE_PROVENANCE.json','CUDA_ACCEPTANCE.json',
+                            'frozen_data_identity.json','evaluation_plan.json','selection_preregistration.json',
+                            'final_checkpoint_identity.json','stage_config.yaml','code_snapshot.json'):
+                files.extend(root.glob(pattern))
+            if (root/'code').is_dir():
+                files.extend(p for p in (root/'code').rglob('*') if p.is_file() and p.suffix in ('.py','.yaml','.md','.sh','.toml','.lock'))
             for pattern in ("experiment_manifest.json", "run_provenance.json", "resolved_config.json", "parameter_report.json",
                             "disk_budget.json", "memory_rank*.jsonl", "failure_rank*.json", "runtime_acceptance_rank*.json"):
                 files.extend(stage_root.glob(pattern))
-            for directory in ("evaluation", "dev_evaluation"):
-                evaluation = root / directory
+            for evaluation in {root/'evaluation',root/'dev_evaluation',stage_root/'evaluation',stage_root/'dev_evaluation'}:
                 if evaluation.is_dir():
                     files.extend(evaluation.rglob("metrics.json"))
                     files.extend(evaluation.rglob("checkpoint_comparison.json"))
@@ -45,6 +50,8 @@ def build_report(roots, output, *, stage="all", max_archive_bytes=64*1024**2):
                     files.extend(evaluation.rglob("paired_to_teacher.json"))
                     files.extend(evaluation.rglob("*montage*.png"))
                     files.extend(evaluation.rglob("*fixed_cases.jpg"))
+                    files.extend(evaluation.rglob('comparison.jpg'))
+                    files.extend(evaluation.rglob('cases.jpg'))
             for source in sorted(set(files)):
                 if not source.is_file() or source.is_symlink():
                     continue

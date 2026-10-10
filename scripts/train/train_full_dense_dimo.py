@@ -31,6 +31,7 @@ from src.dimo.roles import audit_role_optimizers
 from src.dimo.runtime import validate_full_config, validate_output, gpu_admission, MemoryRecorder, disk_budget, append_committed_log, prepare_resume_output
 from src.dimo.transaction import StepCommit, collective_status, sampled_rank_state, set_control_group
 from src.dimo.step import complete_dimo_step
+from src.explicit_region.magicbrush_experiment import is_magicbrush, verify_magicbrush_ready
 
 
 def main():
@@ -53,7 +54,8 @@ def main():
                           (("WORLD_SIZE", "1"), ("RANK", "0"), ("LOCAL_RANK", "0")))
     if world != config["distributed"]["world_size"]:
         raise RuntimeError("FULL_DIMO_WORLD_SIZE_MISMATCH")
-    if not args.synthetic and (not torch.cuda.is_available() or torch.cuda.device_count() < 8):
+    required_world = 4 if is_magicbrush(config) else 8
+    if not args.synthetic and (not torch.cuda.is_available() or torch.cuda.device_count() < required_world):
         raise RuntimeError("FULL_DIMO_FORMAL_REQUIRES_8_VISIBLE_GPUS")
     if args.synthetic:
         device = torch.device("cpu")
@@ -81,7 +83,7 @@ def main():
     commit = StepCommit()
     try:
         if not args.synthetic:
-            admission = gpu_admission()
+            admission = gpu_admission(magicbrush=is_magicbrush(config))
             write_json(output / f"gpu_admission_rank{rank}.json", admission)
         if args.synthetic:
             from src.dimo.synthetic import SyntheticDenseTransformer, SyntheticDataset, synthetic_batch
@@ -97,17 +99,23 @@ def main():
             from src.explicit_region.fixed_corpus import verify_corpus_ready
             from src.dimo.contracts import released_base_model_identity, teacher_bundle_fingerprint
             from scripts.train.train_dimo_editing import prepare_batch
-            ready = verify_corpus_ready(config["data"]["corpus_ready"])
+            ready = verify_magicbrush_ready(config) if is_magicbrush(config) else verify_corpus_ready(config["data"]["corpus_ready"])
             manifest_hash = sha256_file(config["data"]["manifest"])
             if ready.get("train_manifest_sha256") != manifest_hash:
                 raise RuntimeError("FULL_DIMO_CORPUS_READY_MANIFEST_MISMATCH")
             components = load_released_components(config["model"]["repo_or_root"],
                 torch_dtype=torch.bfloat16, transformer_dtype=torch.float32, vq_dtype=torch.float32)
             base = released_base_model_identity(components.identity)
-            bundle = teacher_bundle_fingerprint(config["teacher_checkpoint"], base_model_identity=base, formal=True)
+            bundle = teacher_bundle_fingerprint(config["teacher_checkpoint"], base_model_identity=base, formal=not is_magicbrush(config))
             record = json.loads((Path(config["teacher_checkpoint"]) / "selection_record.json").read_text())
             prereg = record["selection_preregistration"]
-            if prereg.get("protocol") != "full-dense-selection-v2" or prereg["train_manifest_sha256"] != manifest_hash:
+            if is_magicbrush(config):
+                from src.dimo.magicbrush_selection import verify_selection_record
+                from src.explicit_region.dense_checkpoint import verify_dense_checkpoint
+                verify_selection_record(record, verify_dense_checkpoint(config['teacher_checkpoint'])['checkpoint_sha256'])
+                if prereg['train_manifest_sha256'] != manifest_hash:
+                    raise RuntimeError('MAGICBRUSH_TEACHER_TRAIN_IDENTITY_CHANGED')
+            elif prereg.get("protocol") != "full-dense-selection-v2" or prereg["train_manifest_sha256"] != manifest_hash:
                 raise RuntimeError("FULL_DIMO_TEACHER_SOURCE_GROUP_SELECTION_NOT_VERIFIED")
             roles = initialize_dense_model_roles(components.transformer, config["teacher_checkpoint"], expected_base_identity=base).to(device)
             freeze_modules([components.text_encoder, components.llm_encoder, components.vqvae])
@@ -137,7 +145,10 @@ def main():
         identity = {"schema": "full-dense-dimo-identity-v2", "teacher_bundle_fingerprint": bundle,
             "data_sha256": data_hash, "config_sha256": recipe_fingerprint(config), "git_sha": git_sha,
             "world_size": world, "backend": "ddp", "surrogate": config["surrogate"],
-            "precision": config["component_dtypes"], "formal": not args.synthetic}
+            "precision": config["component_dtypes"], "formal": not args.synthetic and not is_magicbrush(config)}
+        if is_magicbrush(config):
+            identity.update(experiment_mode=config['experiment_mode'],initialization=config['initialization'],
+                            teacher_source=record['teacher_source'],selection_scope='magicbrush_exploratory')
         if rank == 0:
             manifest_path = output / "experiment_manifest.json"
             if manifest_path.exists() and json.loads(manifest_path.read_text()) != identity:
@@ -152,6 +163,22 @@ def main():
         generator = torch.Generator().manual_seed(config["seed"] + 10000)
         resumed = None
         if args.resume:
+            if is_magicbrush(config):
+                # Prime the real DDP backward/bucket topology without any
+                # optimizer or EMA update. Loading below restores every RNG.
+                from torch.utils.data import default_collate
+                prepared_prime=prepare(default_collate([dataset[0]]))
+                for role in ('student','auxiliary'):
+                    kwargs=dict(prepared_prime['model_kwargs'],**prepared_prime['prompt_condition']['conditional'],
+                        hidden_states=prepared_prime['source_tokens'],reference_image_hidden_states=prepared_prime['source_tokens'],
+                        edit_region_mask=prepared_prime['edit_region_mask'],timestep=torch.ones(1,device=device))
+                    logits=roles.forward_role(role,training=True,**kwargs)
+                    collective_status(None if torch.isfinite(logits).all().item() else 'NONFINITE_RESUME_DDP_PRIMING_LOGITS')
+                    (logits.float().sum()*0).backward()
+                    roles.model_for(role).zero_grad(set_to_none=True)
+                    del logits
+                memory.record('resume_ddp_backward_priming_no_optimizer',0)
+                del prepared_prime
             resumed = load_checkpoint(args.resume, roles=roles, optimizers=optimizers, schedulers=schedulers, ema=ema,
                 expected_identity=identity, expected_config_hash=identity["config_sha256"])
             commit = StepCommit(resumed["step"], resumed["cursor"])
@@ -164,16 +191,21 @@ def main():
                 except Exception as exc:
                     error = str(exc)
             collective_status(error)
-        sampler = DeterministicEpochSampler(len(dataset), base_seed=config["seed"], epoch=0,
-            train_manifest_sha256=manifest_hash, rank=rank, world_size=world, samples_consumed_in_epoch=commit.cursor)
+        resumed_epoch = resumed['sampler_state']['epoch'] if resumed else 0
+        resumed_cursor = resumed['sampler_state']['samples_consumed_in_epoch'] if resumed else 0
+        if commit.cursor != resumed_epoch*len(dataset)+resumed_cursor:
+            raise RuntimeError('FULL_DIMO_RESUME_GLOBAL_EPOCH_CURSOR_MISMATCH')
+        sampler = DeterministicEpochSampler(len(dataset), base_seed=config["seed"], epoch=resumed_epoch,
+            train_manifest_sha256=manifest_hash, rank=rank, world_size=world,
+            samples_consumed_in_epoch=resumed_cursor)
         if commit.cursor != commit.step * world:
             raise RuntimeError("FULL_DIMO_RESUME_CURSOR_STEP_MISMATCH")
         if resumed and resumed["sampler_state"] != sampler.state_dict():
             raise RuntimeError("FULL_DIMO_RESUME_SAMPLER_IDENTITY_MISMATCH")
-        loader = DenseEpochLoader(dataset, sampler, epochs=1, batch_size=1, generator=generator,
+        loader = DenseEpochLoader(dataset, sampler, epochs=config['epochs'], batch_size=1, generator=generator,
             num_workers=config["num_workers"], pin_memory=device.type == "cuda",
             resume_epoch_start_rng=resumed["loader_rng"]["epoch_start"] if resumed else None)
-        stop = args.stop_at_global_step or config["max_optimizer_steps"]
+        stop = args.stop_at_global_step if args.stop_at_global_step is not None else config["max_optimizer_steps"]
         if not commit.step <= stop <= config["max_optimizer_steps"]:
             raise RuntimeError("FULL_DIMO_INVALID_STOP_STEP")
         def checkpoint(inference_only=False):
@@ -205,7 +237,8 @@ def main():
                     edit_region_mask=prepared["edit_region_mask"], timestep=torch.ones(1, device=device))
                 parity = initial_logits_parity(roles, kwargs, **config["parity"])
                 write_json(output / f"initial_parity_rank{rank}.json", parity)
-            expected_index = sampler.permutation[commit.cursor + rank]
+            epoch_cursor = commit.cursor - sampler.epoch * len(dataset)
+            expected_index = sampler.permutation[epoch_cursor + rank]
             if prepared["sample_uids"] != [dataset.rows[expected_index]["sample_uid"]]:
                 raise RuntimeError("FULL_DIMO_SAMPLER_SEQUENCE_MISMATCH")
             started = time.perf_counter()
@@ -220,16 +253,24 @@ def main():
                 # at preregistered diagnostics, avoiding full state copies.
                 if next_step in (1, 20) or next_step % config["diagnostic_interval"] == 0:
                     sampled_rank_state(roles, optimizers, schedulers, ema, next_step, next_cursor)
+                if is_magicbrush(config) and next_step in (2,20):
+                    from src.explicit_region.dense_runtime import assert_rank_parameters
+                    for role in ('student','auxiliary'):
+                        check=assert_rank_parameters(roles.model_for(role))
+                        write_json(output/f'full_rank_{role}_step{next_step}_rank{rank}.json',check)
                 collective_status()
             diagnostics, _ = commit.execute(lambda: complete_dimo_step(roles, **prepared,
                 student_optimizer=optimizers[0], auxiliary_optimizer=optimizers[1],
                 student_scheduler=schedulers[0], auxiliary_scheduler=schedulers[1], student_ema=ema,
-                base_seed=config["seed"], epoch=0, committed_dimo_step=commit.step,
+                base_seed=config["seed"], epoch=sampler.epoch, committed_dimo_step=commit.step,
                 mask_token_id=5 if args.synthetic else roles.base_model.config.vocab_size - 1,
                 codebook_size=5 if args.synthetic else roles.base_model.config.codebook_size,
                 config=config, phase_callback=stage, failure_injector=failure if args.inject_failure else None),
                 samples=world, finalize=finalize, failure_injector=failure if args.inject_failure else None)
-            sampler.samples_consumed_in_epoch = commit.cursor
+            sampler.samples_consumed_in_epoch = commit.cursor - sampler.epoch * len(dataset)
+            if is_magicbrush(config):
+                append_committed_log(output/f'trace_rank{rank}.jsonl',{'global_step':commit.step,
+                    'sample_uids':prepared['sample_uids'],'epoch':sampler.epoch,'global_cursor':commit.cursor})
             # Logging is after complete-step commit; monitor never participates.
             reduced = torch.tensor([diagnostics[k] for k in ("loss_dimo", "loss_aux", "distribution_energy",
                 "student_grad_norm", "aux_grad_norm", "dimo_gradient_norm")], device=device, dtype=torch.float64)
@@ -254,7 +295,10 @@ def main():
                 checkpoint()
             if commit.step in config["evaluation_steps"]:
                 checkpoint(inference_only=True)
-            if not args.synthetic and commit.step == 500:
+            # MagicBrush coordinator evaluates between complete resume segments,
+            # after all four CUDA workers exit. No extra model occupies VRAM
+            # beside two live optimizers and the three Dense roles.
+            if not args.synthetic and not is_magicbrush(config) and commit.step == 500:
                 # Only rank0 uses existing student/EMA exports in a separate
                 # evaluation process. Preserve all training RNG on every rank.
                 error = None
@@ -268,6 +312,8 @@ def main():
                 collective_status(error)
         if commit.step != stop:
             raise RuntimeError("FULL_DIMO_DATA_EXHAUSTED_BEFORE_HORIZON")
+        if is_magicbrush(config) and stop == 0:
+            checkpoint()
         write_json(output / f"runtime_acceptance_rank{rank}.json", {"status": "PASS", "step": commit.step,
             "world_size": world, "evidence": "CPU_SYNTHETIC" if args.synthetic else "REAL_GPU",
             "gpu_acceptance": "NOT_RUN_RESOURCE_UNAVAILABLE" if args.synthetic else "PASS_FOR_COMPLETED_STEPS"})

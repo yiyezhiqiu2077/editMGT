@@ -21,6 +21,7 @@ wandb/
 checkpoints/
 results/
 experiments/
+artifacts/
 raw_datasets/
 weights/
 *.log

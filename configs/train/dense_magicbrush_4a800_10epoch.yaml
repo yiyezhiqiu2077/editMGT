@@ -1,0 +1,98 @@
+model:
+  repo_or_root: ${EDITMGT_MODEL_ROOT}
+  transformer_subfolder: editmgt
+  text_encoder_subfolder: text_encoder
+  tokenizer_subfolder: tokenizer
+  llm_encoder_subfolder: llm_encoder
+  vqvae_subfolder: vqvae
+  scheduler_subfolder: scheduler
+data:
+  name: fixed_magicbrush_train
+  expected_rows: 8800
+  manifest: ${MB_EXPERIMENT_ROOT}/data/train_8800.jsonl
+  corpus_ready: ${MB_EXPERIMENT_ROOT}/data/MAGICBRUSH_READY.json
+  verify_hashes_at_read: true
+  roots:
+    magicbrush: ${MB_EXPERIMENT_ROOT}/data/train
+output_dir: ${MB_EXPERIMENT_ROOT}/sft/train
+resolution: 1024
+seed: 42
+precision: bf16
+component_dtypes:
+  transformer: fp32
+  text_encoders: bf16
+  vqvae: fp32
+torch_compile: false
+gradient_checkpointing: true
+batch_per_gpu: 1
+gradient_accumulation: 4
+num_workers: 0
+epochs: 10
+max_optimizer_steps: 5500
+scheduler_horizon_steps: 5500
+warmup_steps: 200
+checkpoint_steps:
+- 550
+- 1100
+- 1650
+- 2750
+- 3850
+- 5500
+condition_dropout:
+  enabled: true
+  probability: 0.1
+  scope: text_only
+validation:
+  enabled: false
+quality_gate:
+  enabled: false
+  baseline_start: 101
+  baseline_end: 400
+  window_size: 50
+geometry:
+  max_resample_attempts: 8
+  minimum_mask_retention: 0.75
+token_mask:
+  mode: any_overlap
+  coverage_threshold: 0.5
+  dilation_tokens: 0
+  minimum_edit_tokens: 1
+corruption:
+  mode: roi_hardlock
+  roi_probability: 1.0
+  full_roi_mask_probability: 0.15
+  persistent_conditioning: true
+lora:
+  enabled: false
+  scope: both
+optimizer:
+  name: AdamW
+  learning_rate: 2.0e-06
+  betas:
+  - 0.9
+  - 0.95
+  weight_decay: 0.01
+  gradient_clip: 1.0
+  scheduler: constant_with_warmup
+evaluation:
+  generation_seeds:
+  - 0
+  - 1
+  bootstrap_seed: 42
+  bootstrap_resamples: 10000
+training_mode: full_transformer
+experiment: Dense-SFT-MagicBrush-4A800-10Epoch
+attention_backend: math_sdp
+dense:
+  diagnostic_interval: 100
+  diagnostic_steps:
+  - 1
+  - 2
+  - 10
+  - 20
+  allowed_unused_parameters: []
+  max_shard_bytes: 536870912
+  minimum_free_vram_gib: 60
+experiment_mode: magicbrush_exploratory
+world_size: 4
+initial_dense_checkpoint: ${MB_EXPERIMENT_ROOT}/E3_EPOCH1_MERGED_DENSE

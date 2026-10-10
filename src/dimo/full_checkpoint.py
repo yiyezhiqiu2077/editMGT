@@ -111,7 +111,7 @@ def save(root, *, roles, optimizers, schedulers, ema, step, cursor, identity, co
             write_json(temporary / "architecture.json", architecture_of(roles.model_for("student")))
             write_json(temporary / "inference_identity.json", identity)
             if not inference_only:
-                torch.save({"schema": SCHEMA, "step": step, "cursor": cursor, "epoch": 0,
+                torch.save({"schema": SCHEMA, "step": step, "cursor": cursor, "epoch": (sampler_state or {}).get('epoch',0),
                     "identity": identity, "config_hash": config_hash, "rank_rng": rng,
                     "sampler_state": sampler_state, "loader_rng": loader_rng,
                     "optimizers": [o.state_dict() for o in optimizers],

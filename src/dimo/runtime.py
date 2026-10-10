@@ -8,6 +8,11 @@ import torch
 
 
 def validate_full_config(config, *, synthetic=False):
+    from src.explicit_region.magicbrush_experiment import is_magicbrush, validate_magicbrush_budget
+    magic = is_magicbrush(config)
+    if magic:
+        if synthetic: raise RuntimeError('MAGICBRUSH_REQUIRES_REAL_DATA_AND_GPUS')
+        validate_magicbrush_budget(config, 'dimo')
     if config["model_roles"]["backend"] != "full_dense" or config["distributed"]["backend"] != "ddp":
         raise RuntimeError("FULL_DIMO_REQUIRES_FULL_DENSE_DDP")
     expected = {"student_learning_rate": 1e-6, "auxiliary_learning_rate": 1e-6,
@@ -18,9 +23,9 @@ def validate_full_config(config, *, synthetic=False):
         raise RuntimeError("FULL_DIMO_EMA_RECIPE_CHANGED")
     if config["surrogate"] != {"implementation": "linear", "version": "roi-vocabulary-sum-v1"}:
         raise RuntimeError("FULL_DIMO_SURROGATE_NOT_FROZEN")
-    if (config["batch_per_gpu"], config["gradient_accumulation"], config["epochs"]) != (1, 1, 1):
+    if (config["batch_per_gpu"], config["gradient_accumulation"], config["epochs"]) != (1, 1, 10 if magic else 1):
         raise RuntimeError("FULL_DIMO_BATCH_RECIPE_CHANGED")
-    if not synthetic and (config["max_optimizer_steps"], config["distributed"]["world_size"], config["data"]["expected_rows"], config["formal_ready"]) != (25000, 8, 200000, True):
+    if not synthetic and not magic and (config["max_optimizer_steps"], config["distributed"]["world_size"], config["data"]["expected_rows"], config["formal_ready"]) != (25000, 8, 200000, True):
         raise RuntimeError("FULL_DIMO_FORMAL_HORIZON_OR_DATA_CHANGED")
     if synthetic and (config["formal_ready"] or config["data"]["name"] != "synthetic"):
         raise RuntimeError("SYNTHETIC_CANNOT_BE_FORMAL")
@@ -29,7 +34,7 @@ def validate_full_config(config, *, synthetic=False):
     if config["component_dtypes"] != {"teacher": "fp32", "student": "fp32", "auxiliary": "fp32",
             "gradients": "fp32", "adamw_moments": "fp32", "ema": "fp32", "forward": "bf16_autocast"}:
         raise RuntimeError("FULL_DIMO_PRECISION_RECIPE_CHANGED")
-    if config["initialization"] != {"mask_ratio": .5, "random_tokens_inside_roi": True}:
+    if config["initialization"] != ({"mask_ratio": 1., "random_tokens_inside_roi": False} if magic else {"mask_ratio": .5, "random_tokens_inside_roi": True}):
         raise RuntimeError("FULL_DIMO_INITIALIZATION_RECIPE_CHANGED")
     if config["sampling"] != {"temperature": 1., "top_k": 0, "top_p": 0.}:
         raise RuntimeError("FULL_DIMO_SAMPLING_RECIPE_CHANGED")
@@ -55,20 +60,23 @@ def validate_output(config, *, synthetic=False):
     return output
 
 
-def gpu_admission():
+def gpu_admission(*, magicbrush=False):
     import csv
     import os
     import subprocess
     import psutil
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(",")
-    if len(visible) != 8 or len(set(visible)) != 8:
+    required = 4 if magicbrush else 8
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", ','.join(map(str,range(required)))).split(",")
+    if len(visible) != required or len(set(visible)) != required:
         raise RuntimeError("FULL_DIMO_REQUIRES_EIGHT_DISTINCT_VISIBLE_GPUS")
     raw = subprocess.check_output(["nvidia-smi", "--query-gpu=index,uuid,name,memory.total,memory.used",
         "--format=csv,noheader,nounits"], text=True)
     records = [[cell.strip() for cell in row] for row in csv.reader(raw.splitlines())]
     selected = [row for row in records if row[0] in visible or row[1] in visible]
-    if len(selected) != 8:
+    if len(selected) != required:
         raise RuntimeError("FULL_DIMO_GPU_INVENTORY_MISMATCH")
+    if magicbrush and any('A800' not in r[2] or int(r[3]) < 80000 for r in selected):
+        raise RuntimeError('MAGICBRUSH_REQUIRES_FOUR_A800_80GB_GPUS')
     apps = subprocess.check_output(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True)
     for row in csv.reader(apps.splitlines()):
         if len(row) != 2 or row[0].strip() not in {r[1] for r in selected}:
@@ -112,7 +120,7 @@ def disk_budget(parameters, config, output):
         raise RuntimeError(f"FULL_DIMO_DISK_BUDGET_FAILED: required={required} free={free}")
     return {"parameters_per_role": parameters, "resume_checkpoint_estimate_bytes": resume_bytes,
             "inference_checkpoint_estimate_bytes": inference_bytes, "required_with_atomic_and_margin_bytes": required,
-            "free_bytes": free, "retention": "fixed_six_resume_checkpoints_no_automatic_deletion"}
+            "free_bytes": free, "retention": "fixed_registered_resume_checkpoints_no_automatic_deletion"}
 
 
 def append_committed_log(path, row):

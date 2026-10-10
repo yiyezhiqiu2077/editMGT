@@ -115,6 +115,13 @@ def load_dense_teacher_contract(root, *, expected_base_identity=None):
         prereg = selected.get("selection_preregistration", {})
         if prereg.get("sha256") != recipe_fingerprint({k: v for k, v in prereg.items() if k != "sha256"}):
             raise RuntimeError("SELECTED_DENSE_TEACHER_PREREGISTRATION_MISMATCH")
+    elif manifest.get('status') == 'magicbrush_exploratory':
+        from .magicbrush_selection import verify_selection_record
+        if manifest.get('formal_teacher') is not False or manifest.get('selection_scope')!='magicbrush_exploratory':
+            raise RuntimeError('MAGICBRUSH_TEACHER_CANNOT_BE_FORMAL')
+        if sha256_file(root/'selection_record.json')!=manifest.get('selection_record_sha256'):
+            raise RuntimeError('MAGICBRUSH_TEACHER_SELECTION_RECORD_CHANGED')
+        verify_selection_record(json.loads((root/'selection_record.json').read_text()),identity['checkpoint_sha256'])
     else:
         raise RuntimeError("DENSE_TEACHER_STATUS_INVALID")
     ledger = json.loads((root / "COMPLETED.json").read_text())["files"]

@@ -191,3 +191,26 @@ CUDA_VISIBLE_DEVICES='' uv run python scripts/train/compare_full_dense_resume.py
 ```
 
 完整恢复测试结果未产生前，不宣称 GPU resume 等价性通过。
+
+## 8. MagicBrush 四卡独立探索实验
+
+维护分支 `exp/e3-dense-fp32-v1` 使用两个独立 MagicBrush 配置；D200K 的数据、配置、选择门槛和正式 Teacher 契约保持原样。
+官方 Train 的尺寸异常 turn 按完整 session 排除后，固定 8,784 条（无 padding、无 Train/DEV 泄漏）。
+派生配置为 SFT 549 步/epoch、共 5,490 步；DiMO 2,196 步/epoch、共 21,960 步。
+Teacher DEV 固定沿用旧 527 条/266 groups 和 seeds `[0,1]`；候选 epoch 为 1/2/3/5/7/10。
+
+```bash
+export MB_EXPERIMENT_ROOT=/data/zhangyuyang/editmgt_magicbrush_4a800_20261011
+export PATH="/data02/zhangyuyang/miniconda3/envs/lumina_dimoo/bin:$PATH"
+.venv/bin/python scripts/train/run_magicbrush_two_stage.py \
+  --experiment-root "$MB_EXPERIMENT_ROOT" \
+  --previous-eval /data01/zhangyuyang/editmgt_eval_20261010
+```
+
+运行前要求已冻结的 `data/MAGICBRUSH_READY.json`、合并数值验收、足够的完整流水线磁盘预算，以及当前 Git SHA 的 `admission/CPU_ACCEPTANCE.json`。
+协调器先执行真实四卡 2-step 和 fresh20 / fresh10→resume20 验收，通过后运行十个 epoch。
+SFT 六个候选完整 DEV 的配对统计按预登记门槛自动选 Teacher；无合格候选只回退到原始合并 Dense。
+DiMO 使用完整 FP32 Student/Auxiliary/EMA、线性 surrogate、训练与推理 `r_init=1.0`。
+DiMO 在已完整提交的 epoch checkpoint 处退出四卡 worker，再评测固定 DEV32，并从完整状态恢复；不占用训练峰值显存。
+硬错误停止，禁止自动调整 batch、分辨率或精度。`STATUS.json` 记录真实阶段，两个轻量报告在 `reports/`。
+本次只生成本地曲线，用户已取消 Release 上传；上述命令没有上传选项。
