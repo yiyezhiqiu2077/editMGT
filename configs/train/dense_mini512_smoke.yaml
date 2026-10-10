@@ -1,0 +1,25 @@
+extends: dense_d200k_5epoch.yaml
+experiment: E3-Dense-FP32-Mini512-Smoke
+output_dir: ${DENSE_OUTPUT_ROOT}/mini-smoke
+epochs: 1
+max_optimizer_steps: 16
+checkpoint_steps: [8, 16]
+num_workers: 0
+data:
+  name: fixed_corpus_dev
+  expected_rows: 512
+  manifest: ${MINI_ROOT}/corpus/train_512.jsonl
+  metadata: ${MINI_ROOT}/corpus/train_512.meta.json
+  corpus_ready: ${MINI_ROOT}/corpus/MINI_CORPUS_READY.json
+  roots:
+    magicbrush: ${MINI_ROOT}/assets/magicbrush/train
+    crispedit: ${MINI_ROOT}/assets/crispedit
+    scaleedit: ${MINI_ROOT}/assets/scaleedit
+    interedit: ${MINI_ROOT}/assets/interedit
+  translation_cache: null
+  translation_config: null
+  translation: {immutable_revision: null}
+validation:
+  enabled: false
+  manifest: null
+  dataset_root: null

@@ -34,7 +34,7 @@ from src.dimo.contracts import (
 )
 from src.dimo.ema import TrainableEMA
 from src.dimo.diagnostics import run_nonzero_signal_diagnostic
-from src.dimo.initialization import initialize_shared_model_roles
+from src.dimo.dense_roles import initialize_teacher_roles, initial_logits_parity
 from src.dimo.roles import audit_role_optimizers
 from src.dimo.step import complete_dimo_step
 from src.explicit_region.config import load_config
@@ -167,6 +167,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--prep-smoke", action="store_true")
     parser.add_argument("--teacher-checkpoint")
+    parser.add_argument("--teacher-backend", choices=("lora", "dense"))
     parser.add_argument("--resume")
     parser.add_argument("--max-optimizer-steps", type=int)
     parser.add_argument(
@@ -212,14 +213,15 @@ def main() -> None:
     components = load_released_components(
         config["model"]["repo_or_root"], torch_dtype=dtype, vq_dtype=torch.float32,
         identity_output=output / "component_identity.json",
+        transformer_dtype=torch.float32 if contract and contract.manifest.get("teacher_backend") == "dense" else None,
     )
     base_model_identity = released_base_model_identity(components.identity)
     if contract is not None:
         contract = load_teacher_contract(
             teacher_path, expected_base_identity=base_model_identity
         )
-    roles = initialize_shared_model_roles(
-        components.transformer, teacher_path, model_roles=config["model_roles"]
+    roles = initialize_teacher_roles(
+        components.transformer, teacher_path, model_roles=config["model_roles"], teacher_backend=args.teacher_backend
     )
     roles.to(device)
     components.text_encoder.to(device=device, dtype=dtype).eval().requires_grad_(False)
@@ -303,6 +305,11 @@ def main() -> None:
             if committed_step >= invocation_stop:
                 break
             prepared = prepare_batch(batch, components, config, device)
+            if committed_step == 0 and getattr(roles, "teacher_backend", "lora") == "dense":
+                kwargs = dict(prepared["model_kwargs"], **prepared["prompt_condition"]["conditional"],
+                    hidden_states=prepared["source_tokens"], reference_image_hidden_states=prepared["source_tokens"],
+                    edit_region_mask=prepared["edit_region_mask"], timestep=torch.ones(prepared["source_tokens"].shape[0], device=device))
+                (output / "dense_initial_parity.json").write_text(json.dumps(initial_logits_parity(roles, kwargs, atol=1e-5, rtol=1e-5)))
             diagnostic_path = output / "dimo_nonzero_signal_test.json"
             if committed_step == 0 and not args.resume and not diagnostic_path.exists():
                 run_nonzero_signal_diagnostic(

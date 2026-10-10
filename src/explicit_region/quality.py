@@ -28,13 +28,13 @@ class QualityGate:
         return gate
 
     def update(self, step, *, loss, max_abs_logit, clip_applied, update_ratio, finite_parameters):
-        if not math.isfinite(loss) or not finite_parameters:
+        if not math.isfinite(loss) or finite_parameters is False:
             self.status, self.reason = "QUALITY_FAILED", "non_finite"
             return False
         if max_abs_logit > float(self.config.get("max_abs_logit", float("inf"))):
             self.status, self.reason = "QUALITY_FAILED", "max_abs_logit"
             return False
-        if update_ratio > float(self.config.get("max_update_ratio", float("inf"))):
+        if update_ratio is not None and update_ratio > float(self.config.get("max_update_ratio", float("inf"))):
             self.status, self.reason = "QUALITY_FAILED", "max_update_ratio"
             return False
         self.losses.append((step, loss))

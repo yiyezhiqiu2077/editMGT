@@ -23,7 +23,7 @@ from src.dimo.contracts import (
     released_base_model_identity, teacher_bundle_fingerprint,
 )
 from src.dimo.ema import apply_ema_to_student_role
-from src.dimo.initialization import initialize_shared_model_roles
+from src.dimo.dense_roles import initialize_teacher_roles
 from src.dimo.one_step import one_step_edit_tokens
 from src.dimo.rng import normal_noise_per_sample, stable_seed
 from src.explicit_region.geometry import image_to_tensor
@@ -48,6 +48,7 @@ def main() -> None:
     parser.add_argument("--edit-region-mask", required=True)
     parser.add_argument("--student-checkpoint", required=True)
     parser.add_argument("--teacher-checkpoint", required=True)
+    parser.add_argument("--teacher-backend", choices=("lora", "dense"))
     parser.add_argument("--model-root", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--seed", type=int, default=42)
@@ -63,7 +64,8 @@ def main() -> None:
         raise RuntimeError("one-step inference requires exactly one visible GPU")
     device = torch.device("cuda")
     components = load_released_components(
-        args.model_root, torch_dtype=torch.bfloat16, vq_dtype=torch.float32
+        args.model_root, torch_dtype=torch.bfloat16, vq_dtype=torch.float32,
+        transformer_dtype=torch.float32 if (Path(args.teacher_checkpoint) / "model.safetensors.index.json").is_file() else None
     )
     base_model_identity = released_base_model_identity(components.identity)
     teacher_bundle = teacher_bundle_fingerprint(
@@ -75,20 +77,23 @@ def main() -> None:
         model_roles=DIMO_MODEL_ROLES_V11,
         upstream_commit=DIMO_UPSTREAM_COMMIT,
     )
-    roles = initialize_shared_model_roles(
-        components.transformer, args.teacher_checkpoint, model_roles=DIMO_MODEL_ROLES_V11
+    roles = initialize_teacher_roles(
+        components.transformer, args.teacher_checkpoint, model_roles=DIMO_MODEL_ROLES_V11, teacher_backend=args.teacher_backend
     )
-    state = torch.load(Path(args.student_checkpoint) / "training_state.pt", map_location="cpu")
-    validate_inference_checkpoint(
-        state,
-        expected_teacher_bundle_fingerprint=teacher_bundle,
-        expected_inference_fingerprint=inference_identity,
-        expected_upstream_commit=DIMO_UPSTREAM_COMMIT,
-    )
-    if args.weights == "student":
-        roles.load_role_state_dict("student", state["student_state"])
+    if (Path(args.student_checkpoint) / "inference_identity.json").is_file():
+        from src.dimo.dense_distributed_checkpoint import load_inference
+        recorded = json.loads((Path(args.student_checkpoint) / "inference_identity.json").read_text())
+        expected = {"teacher_bundle_fingerprint": teacher_bundle, "inference_fingerprint": inference_identity,
+                    "upstream_commit": DIMO_UPSTREAM_COMMIT, "world_size": recorded["world_size"]}
+        load_inference(args.student_checkpoint, roles=roles, expected_identity=expected, weights=args.weights)
     else:
-        apply_ema_to_student_role(roles, state["student_ema"])
+        state = torch.load(Path(args.student_checkpoint) / "training_state.pt", map_location="cpu")
+        validate_inference_checkpoint(state, expected_teacher_bundle_fingerprint=teacher_bundle,
+            expected_inference_fingerprint=inference_identity, expected_upstream_commit=DIMO_UPSTREAM_COMMIT)
+        if args.weights == "student":
+            roles.load_role_state_dict("student", state["student_state"])
+        else:
+            apply_ema_to_student_role(roles, state["student_ema"])
     roles.to(device)
     roles.eval()
     if roles.base_model.training:

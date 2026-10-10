@@ -1,0 +1,15 @@
+extends: prep_smoke.yaml
+teacher_backend: dense
+data:
+  name: fixed_corpus_dev
+  expected_rows: 512
+  manifest: ${MINI_ROOT}/corpus/train_512.jsonl
+  corpus_ready: ${MINI_ROOT}/corpus/MINI_CORPUS_READY.json
+  roots:
+    magicbrush: ${MINI_ROOT}/assets/magicbrush/train
+    crispedit: ${MINI_ROOT}/assets/crispedit
+    scaleedit: ${MINI_ROOT}/assets/scaleedit
+    interedit: ${MINI_ROOT}/assets/interedit
+  verify_hashes_at_read: true
+output_dir: ${DENSE_DIMO_OUTPUT_ROOT}
+parity: {atol: 0.00001, rtol: 0.00001}

@@ -1,0 +1,32 @@
+model_root: ${EDITMGT_MODEL_ROOT}
+checkpoint_root: ${DENSE_OUTPUT_ROOT}/train
+output_root: ${DENSE_OUTPUT_ROOT}/dev_evaluation
+inference_config: configs/eval/dense_dev.yaml
+lora_checkpoint: ${E3_LORA_CHECKPOINT}
+candidate_steps: [3125, 6250, 9375, 12500, 15625, 18750, 21875, 25000, 28125, 31250]
+datasets:
+  - name: magicbrush
+    manifest: ${DENSE_MAGICBRUSH_DEV_MANIFEST}
+    root: ${MAGICBRUSH_DEV_ROOT}
+    scope: official_DEV
+  - name: crispedit
+    manifest: ${DENSE_CRISPEDIT_AUX_MANIFEST}
+    root: ${CRISPEDIT_ROOT}
+    scope: auxiliary
+  - name: scaleedit
+    manifest: ${DENSE_SCALEEDIT_AUX_MANIFEST}
+    root: ${SCALEEDIT_ROOT}
+    scope: auxiliary
+  - name: interedit
+    manifest: ${DENSE_INTEREDIT_AUX_MANIFEST}
+    root: ${INTEREDIT_ROOT}
+    scope: auxiliary
+selection:
+  status: PENDING
+  primary: magicbrush
+  baseline: E0-region
+  rule: minimum_inside_lpips_subject_to_preservation
+  maximum_outside_lpips_degradation: null
+  minimum_inside_lpips_improvement: null
+  require_inside_ci_improvement: true
+  tie_break: earlier_step

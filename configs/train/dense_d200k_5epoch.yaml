@@ -1,0 +1,22 @@
+extends: _cluster_8g_base.yaml
+training_mode: full_transformer
+experiment: E3-Dense-FP32-D200K-5Epoch
+output_dir: ${DENSE_OUTPUT_ROOT}/train
+attention_backend: math_sdp
+component_dtypes: {transformer: fp32, text_encoders: bf16, vqvae: fp32}
+lora: {enabled: false}
+epochs: 5
+max_optimizer_steps: 31250
+scheduler_horizon_steps: 31250
+warmup_steps: 200
+checkpoint_steps: [3125, 6250, 9375, 12500, 15625, 18750, 21875, 25000, 28125, 31250]
+optimizer: {learning_rate: 0.000002}
+dense:
+  diagnostic_interval: 100
+  diagnostic_steps: [1, 4, 8, 16]
+  allowed_unused_parameters: []
+  max_shard_bytes: 536870912
+  minimum_free_vram_gib: 38
+validation:
+  interval_steps: 3125
+  inference_config: configs/eval/e3_periodic_probe.yaml
