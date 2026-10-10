@@ -15,6 +15,13 @@ class DenseDiMOModelRoles(DiMOModelRoles):
         super().__init__(model, adapter_names={"teacher": "__dense_teacher__", "student": "student", "auxiliary": "auxiliary"},
                          initialize_from_teacher=False)
 
+    def _forward(self, role, *, training=None, **kwargs):
+        from contextlib import nullcontext
+        device = next(self.base_model.parameters()).device
+        context = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
+        with context:
+            return super()._forward(role, training=training, **kwargs)
+
     @contextmanager
     def _activate(self, role, training=None):
         if role not in self.adapter_names:

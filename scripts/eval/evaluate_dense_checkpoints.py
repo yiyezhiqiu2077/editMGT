@@ -59,6 +59,16 @@ def main():
                 "selection_preregistration_sha256": registration["sha256"] if registration else None,
                 "count": a.count, "steps": steps,
                 "validation_sha256": {d["name"]: sha256_file(d["manifest"]) for d in plan["datasets"]}}
+    from src.explicit_region.dense_runtime import audit_released_fp32
+    identity["released_transformer_sha256"] = audit_released_fp32(plan["model_root"])["files"]
+    identity["model_checkpoints"] = {}
+    for model in models:
+        if model["backend"] == "dense":
+            identity["model_checkpoints"][model["name"]] = verify_dense_checkpoint(model["checkpoint"])["checkpoint_sha256"]
+        elif model["backend"] == "lora":
+            root = Path(model["checkpoint"])
+            identity["model_checkpoints"][model["name"]] = {n: sha256_file(root / n) for n in
+                ("adapter_model.safetensors", "mask_conditioning.safetensors", "fingerprint.json", "trainable_config.json")}
     ledger = out / "evaluation_identity.json"
     if ledger.exists() and json.loads(ledger.read_text()) != identity:
         raise RuntimeError("DENSE_EVALUATION_IDENTITY_CHANGED")
@@ -98,7 +108,8 @@ def main():
             name = dataset["name"]
             result = results[model["name"]][name]
             samples = result["per_sample_after_seed_mean"]
-            item["metrics"][name] = {k: sum(r["metrics"][k] for r in samples) / len(samples) for k in METRICS}
+            from src.explicit_region.metrics import finite_mean
+            item["metrics"][name] = {k: finite_mean(r["metrics"].get(k) for r in samples) for k in METRICS}
             item["paired_to_E0-region"].update(paired_comparison(result, results["E0-region"][name], **{
                 "seed": infer["bootstrap"]["seed"], "resamples": infer["bootstrap"]["resamples"]}))
         comparison.append(item)

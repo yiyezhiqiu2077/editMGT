@@ -63,7 +63,8 @@ def main():
     if world > 1:
         dist.init_process_group("nccl")
     device = torch.device("cuda", local)
-    configure_determinism(); torch.manual_seed(config["seed"])
+    from accelerate.utils import set_seed
+    configure_determinism(); set_seed(config["seed"], device_specific=False)
     output = Path(config["output_dir"])
     if rank == 0:
         output.mkdir(parents=True, exist_ok=True)

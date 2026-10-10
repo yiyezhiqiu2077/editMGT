@@ -113,7 +113,7 @@ def select_checkpoint(plan, preregistration, comparison, output):
         if inside["mean_delta"] is None or outside["mean_delta"] is None:
             continue
         bound = inside["bootstrap_95_ci"][1] if rules.get("require_inside_ci_improvement", True) else inside["mean_delta"]
-        if bound <= -rules["minimum_inside_lpips_improvement"] and outside["mean_delta"] <= rules["maximum_outside_lpips_degradation"]:
+        if bound < -rules["minimum_inside_lpips_improvement"] and outside["mean_delta"] <= rules["maximum_outside_lpips_degradation"]:
             passed.append(item)
     if not passed:
         result = {"status": "PENDING", "reason": "no checkpoint satisfies preregistered DEV rules"}

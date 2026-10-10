@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 import copy
+import functools
 import json
 from pathlib import Path
 import random
@@ -85,6 +86,12 @@ def inference_safety(pipe):
     post = pipe.transformer.register_forward_hook(outputs)
     original = pipe.scheduler.step
     decode = pipe.vqvae.decode
+    original_forward = pipe.transformer.forward
+    @functools.wraps(original_forward)
+    def autocast_transformer(*args, **kwargs):
+        reference = kwargs.get("hidden_states")
+        with torch.autocast(device_type=reference.device.type, dtype=torch.bfloat16):
+            return original_forward(*args, **kwargs)
     def checked_step(*args, **kwargs):
         result = original(*args, **kwargs)
         tokens = result.prev_sample
@@ -98,11 +105,13 @@ def inference_safety(pipe):
             raise RuntimeError("DENSE_INFERENCE_NONFINITE_DECODE")
         return result
     pipe.scheduler.step, pipe.vqvae.decode = checked_step, checked_decode
+    pipe.transformer.forward = autocast_transformer
     try:
         yield
     finally:
         pre.remove(); post.remove()
         pipe.scheduler.step, pipe.vqvae.decode = original, decode
+        pipe.transformer.forward = original_forward
 
 
 def pil(tensor):
@@ -138,7 +147,9 @@ def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, c
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 started = time.perf_counter()
-                with autocast():
+                # Autocast only the Transformer, never VQ encode/quantize/decode.
+                # FP32 VQ token assignments must match the original evaluator.
+                with nullcontext():
                     result = pipe(prompt=item["instruction_en"], reference_image=source, mask_image=mask,
                         height=config["resolution"], width=config["resolution"],
                         num_inference_steps=config["steps"], guidance_scale=config["guidance_scale"],
