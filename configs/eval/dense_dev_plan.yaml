@@ -22,11 +22,22 @@ datasets:
     root: ${INTEREDIT_ROOT}
     scope: auxiliary
 selection:
-  status: PENDING
+  status: PREREGISTERED
   primary: magicbrush
   baseline: E0-region
   rule: minimum_inside_lpips_subject_to_preservation
-  maximum_outside_lpips_degradation: null
-  minimum_inside_lpips_improvement: null
+  maximum_outside_lpips_degradation: 0.01
+  minimum_inside_lpips_improvement: 0.005
   require_inside_ci_improvement: true
+  confidence_level: 0.95
+  bootstrap_resamples: 10000
+  bootstrap_seed: 42
+  bootstrap_unit: source_group_cluster
+  estimand: sample_weighted_mean_delta
+  inside_ci_rule: positive_improvement_lower_bound
+  outside_rule: mean_degradation
   tie_break: earlier_step
+  on_no_eligible_checkpoint: STOP_TEACHER_EXPORT
+group_identity_contract: ${DENSE_GROUP_IDENTITY_CONTRACT}
+train_manifest: ${FIXED200K_MANIFEST}
+test_manifests: ${DENSE_TEST_MANIFESTS_JSON}

@@ -1,0 +1,11 @@
+extends: full_dense.yaml
+data:
+  name: fixed_200k
+  expected_rows: 200000
+  manifest: ${FIXED200K_MANIFEST}
+  corpus_ready: ${CORPUS_READY}
+  roots:
+    magicbrush: ${MAGICBRUSH_ROOT}
+    crispedit: ${CRISPEDIT_ROOT}
+    scaleedit: ${SCALEEDIT_ROOT}
+    interedit: ${INTEREDIT_ROOT}

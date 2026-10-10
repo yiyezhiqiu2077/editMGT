@@ -1,0 +1,9 @@
+model_root: ${EDITMGT_MODEL_ROOT}
+teacher_checkpoint: ${DIMO_TEACHER_CHECKPOINT}
+inference_config: configs/eval/dense_dev.yaml
+group_identity_contract: ${DENSE_GROUP_IDENTITY_CONTRACT}
+datasets:
+  - name: magicbrush
+    manifest: ${DENSE_MAGICBRUSH_DEV_MANIFEST}
+    root: ${MAGICBRUSH_DEV_ROOT}
+steps: [0, 500, 2500, 5000, 10000, 15000, 20000, 25000]

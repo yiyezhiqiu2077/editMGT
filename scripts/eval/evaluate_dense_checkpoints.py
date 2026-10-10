@@ -36,6 +36,8 @@ def main():
         print(json.dumps(selection_registration(plan, registration_path)))
         return
     registration = json.loads(registration_path.read_text()) if registration_path.exists() else None
+    if registration is None and not (a.count or a.checkpoint_steps):
+        raise RuntimeError("FORMAL_DEV_REQUIRES_PRIOR_IMMUTABLE_PREREGISTRATION")
     if registration is not None:
         expected = selection_registration(plan, registration_path)
         if registration != expected:
@@ -89,6 +91,8 @@ def main():
                     "--output-dir", str(folder), "--device", a.device]
                 if model.get("checkpoint"):
                     command += ["--checkpoint", model["checkpoint"]]
+                if plan.get("group_identity_contract"):
+                    command += ["--group-identity-contract", plan["group_identity_contract"]]
                 if a.count:
                     command += ["--count", str(a.count)]
                 subprocess.run(command, cwd=ROOT, check=True)
@@ -100,7 +104,7 @@ def main():
     comparison = []
     for dataset in plan["datasets"]:
         name = dataset["name"]
-        assert_matching_predictions([predictions[m["name"]][name] for m in models])
+        assert_matching_predictions([predictions[m["name"]][name] for m in models], expected_seeds=infer["generation_seeds"])
         comparison_visual({m["name"]: predictions[m["name"]][name] for m in models}, out / f"{name}_fixed_cases.jpg")
     for model in models:
         item = dict(model, metrics={}, **{"paired_to_E0-region": {}})
@@ -111,7 +115,10 @@ def main():
             from src.explicit_region.metrics import finite_mean
             item["metrics"][name] = {k: finite_mean(r["metrics"].get(k) for r in samples) for k in METRICS}
             item["paired_to_E0-region"].update(paired_comparison(result, results["E0-region"][name], **{
-                "seed": infer["bootstrap"]["seed"], "resamples": infer["bootstrap"]["resamples"]}))
+                "seed": plan["selection"].get("bootstrap_seed", infer["bootstrap"]["seed"]),
+                "resamples": plan["selection"].get("bootstrap_resamples", infer["bootstrap"]["resamples"]),
+                "confidence_level": plan["selection"].get("confidence_level", .95),
+                "strict_groups": registration is not None and registration.get("protocol") == "full-dense-selection-v2"}))
         comparison.append(item)
     write_json(out / "checkpoint_comparison.json", comparison)
     with (out / "checkpoint_comparison.csv").open("w") as handle:

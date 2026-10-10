@@ -1,0 +1,7 @@
+extends: full_dense_d200k.yaml
+experiment: Full-DenseDiMO-FSDP-CANDIDATE
+formal_ready: false
+distributed: {backend: fsdp_full_shard, world_size: 8}
+checkpoint_schema: UNVALIDATED-full-dense-dimo-fsdp-candidate-v1
+backend_validation_status: NOT_RUN_RESOURCE_UNAVAILABLE
+production_launcher_enabled: false

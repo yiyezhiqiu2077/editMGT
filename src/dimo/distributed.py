@@ -6,6 +6,7 @@ import json
 
 import torch
 import torch.distributed as dist
+import numpy as np
 
 
 def rank_world():
@@ -23,13 +24,22 @@ def collective_require(condition, message, device):
 def tensor_digest(value):
     value = value.detach().cpu().contiguous()
     header = json.dumps([str(value.dtype), list(value.shape)]).encode()
-    return hashlib.sha256(header + value.reshape(-1).view(torch.uint8).numpy().tobytes()).hexdigest()
+    digest = hashlib.sha256(header)
+    raw = value.reshape(-1).view(torch.uint8).numpy()
+    for offset in range(0, raw.size, 64 * 1024**2):
+        digest.update(memoryview(raw[offset:offset + 64 * 1024**2]))
+    return digest.hexdigest()
 
 
 def state_digest(value):
     def encode(v):
         if isinstance(v, torch.Tensor):
             return {'tensor_sha256': tensor_digest(v)}
+        if isinstance(v, np.ndarray):
+            return {"numpy_dtype": str(v.dtype), "shape": list(v.shape),
+                    "sha256": hashlib.sha256(v.tobytes()).hexdigest()}
+        if isinstance(v, np.generic):
+            return v.item()
         if isinstance(v, dict):
             return {str(k): encode(x) for k, x in sorted(v.items(), key=lambda item: str(item[0]))}
         if isinstance(v, (list, tuple)):

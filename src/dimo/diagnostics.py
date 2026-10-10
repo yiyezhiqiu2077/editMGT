@@ -13,11 +13,8 @@ from .surrogate import surrogate_logit_loss
 
 
 def tensor_grad_norm(parameters) -> float:
-    total = 0.0
-    for parameter in parameters:
-        if parameter.grad is not None:
-            total += float(parameter.grad.detach().float().square().sum())
-    return total**0.5
+    norms = [torch.linalg.vector_norm(p.grad.detach().float()) for p in parameters if p.grad is not None]
+    return float(torch.linalg.vector_norm(torch.stack(norms))) if norms else 0.0
 
 
 def token_diagnostics(

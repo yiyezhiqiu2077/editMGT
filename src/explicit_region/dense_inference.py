@@ -125,7 +125,7 @@ def pil(tensor):
 
 @torch.inference_mode()
 def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, config,
-                              timestep_mode, output_dir, device="cuda", count=None):
+                              timestep_mode, output_dir, device="cuda", count=None, group_contract=None):
     if "test" in dataset_name.lower():
         raise RuntimeError("DENSE_DEV_PIPELINE_FORBIDS_TEST")
     rows = [json.loads(line) for line in Path(manifest).read_text().splitlines() if line.strip()]
@@ -133,6 +133,10 @@ def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, c
         raise RuntimeError("DENSE_DEV_MANIFEST_CONTAINS_TEST")
     if any(r["dataset_name"] != dataset_name for r in rows):
         raise RuntimeError("DENSE_EVAL_DATASET_IDENTITY_MISMATCH")
+    clusters = {}
+    if group_contract is not None:
+        from .group_statistics import audited_clusters
+        clusters = audited_clusters(rows, group_contract)
     ds = CanonicalAlignedDataset(rows, canonical_root, resolution=config["resolution"],
         base_seed=42, minimum_mask_retention=.75, max_random_attempts=8, verify_hashes=True)
     out = Path(output_dir)
@@ -150,17 +154,21 @@ def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, c
                 generator = torch.Generator(device=device).manual_seed(seed)
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
-                started = time.perf_counter()
-                # Autocast only the Transformer, never VQ encode/quantize/decode.
-                # FP32 VQ token assignments must match the original evaluator.
-                result = pipe(prompt=item["instruction_en"], reference_image=source, mask_image=mask,
-                    height=config["resolution"], width=config["resolution"],
-                    num_inference_steps=config["steps"], guidance_scale=config["guidance_scale"],
-                    reference_strength=config["reference_strength"], generator=generator,
-                    lora_scope="both", inference_timestep_mode=timestep_mode).images[0]
+                from .latency import repeated_latency
+                def operation():
+                    return pipe(prompt=item["instruction_en"], reference_image=source, mask_image=mask,
+                        height=config["resolution"], width=config["resolution"],
+                        num_inference_steps=config["steps"], guidance_scale=config["guidance_scale"],
+                        reference_strength=config["reference_strength"],
+                        generator=torch.Generator(device=device).manual_seed(seed),
+                        lora_scope="both", inference_timestep_mode=timestep_mode).images[0]
+                timing = config.get("latency", {"warmup": 0, "repeats": 1})
+                result, latency = repeated_latency(operation, {"transformer": (pipe.transformer, "forward"),
+                    "vq_encode": (pipe.vqvae, "encode"), "vq_decode": (pipe.vqvae, "decode"),
+                    "clip": (pipe.text_encoder, "forward"), "gemma": (pipe.text_encoder_t5, "forward")}, device, **timing)
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
-                elapsed = time.perf_counter() - started
+                elapsed = latency["mean_seconds"]
                 stem = f"{dataset_name}_{i:06d}_seed{seed}"
                 paths = {}
                 for name, image in (("source", source), ("target", target), ("mask", mask), ("output", result)):
@@ -168,8 +176,13 @@ def generate_fixed_evaluation(pipe, *, manifest, canonical_root, dataset_name, c
                     image.save(path)
                     paths[name] = str(path.resolve())
                 records.append(paths | {"sample_key": item["sample_key"], "sample_uid": rows[i]["sample_uid"],
+                    "group_id": rows[i]["group_id"], "cluster_id": clusters.get(rows[i]["sample_uid"]),
+                    "source_sha256": rows[i]["source_sha256"], "target_sha256": rows[i]["target_sha256"],
+                    "region_sha256": rows[i]["region_sha256"], "geometry": item["geometry"],
                     "dataset_name": dataset_name, "edit_type": item["edit_type"], "seed": seed,
                     "runtime_seconds": elapsed, "timestep_mode": timestep_mode,
+                    "latency_protocol": latency,
+                    "transformer_forward_count": latency["phases"][0]["transformer"]["calls"],
                     "token_outside_lock": "PASS", "manifest_sha256": sha256_file(manifest)})
     predictions = out / "predictions.jsonl"
     predictions.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records))

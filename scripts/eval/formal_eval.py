@@ -113,11 +113,23 @@ def evaluate(manifest, config, output, device):
         sample_rows.setdefault(key, []).append(row)
     samples = []
     for (dataset_name, sample_key), repeated in sample_rows.items():
+        seeds = [row["seed"] for row in repeated]
+        if len(seeds) != len(set(seeds)):
+            raise RuntimeError("EVALUATION_DUPLICATE_GENERATION_SEED")
+        expected_seeds = config.get("generation_seeds")
+        if expected_seeds is not None and sorted(seeds) != sorted(expected_seeds):
+            raise RuntimeError("EVALUATION_INCOMPLETE_GENERATION_SEEDS")
+        identity_fields = ("sample_uid", "group_id", "cluster_id", "source_sha256", "target_sha256", "region_sha256", "manifest_sha256")
+        for field in identity_fields:
+            if any(row.get(field) != repeated[0].get(field) for row in repeated):
+                raise RuntimeError("EVALUATION_SEED_IDENTITY_CONFLICT")
         names = {name for row in repeated for name in row["metrics"]}
         averaged = {name: finite_mean(row["metrics"].get(name) for row in repeated) for name in names}
         if all(row["metrics"].get("no_op") is not None for row in repeated):
             averaged["no_op"] = sum(bool(row["metrics"]["no_op"]) for row in repeated) / len(repeated)
         samples.append({"dataset_name": dataset_name, "sample_key": sample_key,
+                        **{field: repeated[0].get(field) for field in identity_fields},
+                        "generation_seeds": sorted(seeds),
                         "edit_type": repeated[0].get("edit_type") or "unknown", "metrics": averaged})
     grouped = defaultdict(list)
     for row in samples:
@@ -135,6 +147,19 @@ def evaluate(manifest, config, output, device):
                 aggregate[group][name] = {"mean": None, "standard_error": None, "bootstrap_95_ci": None}
                 continue
             rng=np.random.default_rng(int(bootstrap["seed"])); n=int(bootstrap["resamples"])
+            if bootstrap.get("unit") == "source_group_cluster":
+                from src.explicit_region.group_statistics import cluster_bootstrap
+                valid = [row for row in members if row["metrics"].get(name) is not None and np.isfinite(row["metrics"][name])]
+                if any(not row.get("cluster_id") for row in valid):
+                    raise RuntimeError("EVALUATION_GROUP_IDENTITY_REQUIRED")
+                if len({row["cluster_id"] for row in valid}) < 2:
+                    aggregate[group][name] = {"mean_delta": float(values.mean()), "n": len(values),
+                        "independent_groups": 1, "bootstrap_95_ci": None,
+                        "reason": "INSUFFICIENT_INDEPENDENT_GROUPS_DIAGNOSTIC_ONLY"}
+                    continue
+                aggregate[group][name] = cluster_bootstrap(values, [row["cluster_id"] for row in valid],
+                    seed=int(bootstrap["seed"]), resamples=n)
+                continue
             boot=values[rng.integers(0,len(values),size=(n,len(values)))].mean(1)
             aggregate[group][name]={"mean":float(values.mean()),"standard_error":float(values.std(ddof=1)/np.sqrt(len(values))) if len(values)>1 else 0.0,
                                     "bootstrap_95_ci":[float(np.percentile(boot,2.5)),float(np.percentile(boot,97.5))]}

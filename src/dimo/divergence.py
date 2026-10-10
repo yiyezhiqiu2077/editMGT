@@ -17,6 +17,8 @@ def dimo_divergence_gradient(
 ) -> torch.Tensor:
     if teacher_logits.shape != auxiliary_logits.shape or teacher_logits.ndim < 2:
         raise ValueError("teacher and auxiliary logits must have the same [...,V] shape")
+    if not torch.isfinite(teacher_logits).all() or not torch.isfinite(auxiliary_logits).all():
+        raise FloatingPointError("DIMO_NONFINITE_TEACHER_OR_AUXILIARY_LOGITS")
     if temperature_teacher <= 0 or temperature_auxiliary <= 0:
         raise ValueError("temperatures must be positive")
     if not 0 <= beta <= 1:
@@ -42,4 +44,6 @@ def dimo_divergence_gradient(
         if pseudo_mask.shape != gradient.shape[:-1]:
             raise ValueError("pseudo_mask must match all non-vocabulary logit dimensions")
         gradient = gradient.masked_fill(~pseudo_mask.bool().unsqueeze(-1), 0)
-    return torch.nan_to_num(gradient.float()).detach()
+    if not torch.isfinite(gradient).all():
+        raise FloatingPointError("DIMO_NONFINITE_DIVERGENCE")
+    return gradient.float().detach()

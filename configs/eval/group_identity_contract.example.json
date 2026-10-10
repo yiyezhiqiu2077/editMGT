@@ -1,0 +1,29 @@
+{
+  "schema": "source-group-identity-v1",
+  "datasets": {
+    "magicbrush": {
+      "reviewed": false,
+      "group_semantics": "editing_sequence",
+      "evidence_path": "/path/to/reviewed/magicbrush-source-group-evidence.jsonl",
+      "evidence_sha256": "REPLACE_WITH_SHA256_OF_REVIEWED_EVIDENCE"
+    },
+    "crispedit": {
+      "reviewed": false,
+      "group_semantics": "original_source",
+      "evidence_path": "/path/to/reviewed/crispedit-source-group-evidence.jsonl",
+      "evidence_sha256": "REPLACE_WITH_SHA256_OF_REVIEWED_EVIDENCE"
+    },
+    "scaleedit": {
+      "reviewed": false,
+      "group_semantics": "original_source",
+      "evidence_path": "/path/to/reviewed/scaleedit-source-group-evidence.jsonl",
+      "evidence_sha256": "REPLACE_WITH_SHA256_OF_REVIEWED_EVIDENCE"
+    },
+    "interedit": {
+      "reviewed": false,
+      "group_semantics": "editing_sequence",
+      "evidence_path": "/path/to/reviewed/interedit-source-group-evidence.jsonl",
+      "evidence_sha256": "REPLACE_WITH_SHA256_OF_REVIEWED_EVIDENCE"
+    }
+  }
+}

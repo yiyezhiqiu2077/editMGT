@@ -237,6 +237,8 @@ def main():
         if accelerator.is_main_process:
             with (output / "train_metrics.jsonl").open("a") as handle:
                 handle.write(json.dumps(row, allow_nan=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             print(json.dumps(row, allow_nan=False), flush=True)
         collective_require(quality_ok, "DENSE_QUALITY_GATE_FAILED", accelerator.device)
         validation_due = config["validation"].get("enabled") and step % config["validation"]["interval_steps"] == 0

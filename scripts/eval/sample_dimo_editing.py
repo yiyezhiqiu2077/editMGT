@@ -77,10 +77,19 @@ def main() -> None:
         model_roles=DIMO_MODEL_ROLES_V11,
         upstream_commit=DIMO_UPSTREAM_COMMIT,
     )
-    roles = initialize_teacher_roles(
-        components.transformer, args.teacher_checkpoint, model_roles=DIMO_MODEL_ROLES_V11, teacher_backend=args.teacher_backend
-    )
-    if (Path(args.student_checkpoint) / "inference_identity.json").is_file():
+    marker = Path(args.student_checkpoint) / "COMPLETED.json"
+    full_dense = marker.is_file() and json.loads(marker.read_text()).get("schema") == "full-dense-dimo-ddp-v2"
+    if full_dense:
+        from src.dimo.inference import load_dense_inference_role
+        roles, _ = load_dense_inference_role(components.transformer, args.student_checkpoint,
+            weights="student" if args.weights == "student" else "ema", teacher_bundle=teacher_bundle)
+    else:
+        roles = initialize_teacher_roles(
+            components.transformer, args.teacher_checkpoint, model_roles=DIMO_MODEL_ROLES_V11, teacher_backend=args.teacher_backend
+        )
+    if full_dense:
+        pass
+    elif (Path(args.student_checkpoint) / "inference_identity.json").is_file():
         from src.dimo.dense_distributed_checkpoint import load_inference
         recorded = json.loads((Path(args.student_checkpoint) / "inference_identity.json").read_text())
         expected = {"teacher_bundle_fingerprint": teacher_bundle, "inference_fingerprint": inference_identity,
@@ -135,7 +144,8 @@ def main() -> None:
     seed_args = (args.seed, 0, "inference-sample", 0)
     noise_seed = stable_seed(*seed_args, "dimo-embedding-noise")
     noise = normal_noise_per_sample(
-        torch.empty(1, roles.base_model.inner_dim, grid, grid, device=device, dtype=torch.bfloat16),
+        torch.empty(1, roles.base_model.inner_dim, grid, grid, device=device,
+                    dtype=torch.float32 if full_dense else torch.bfloat16),
         [noise_seed],
     )
     output = one_step_edit_tokens(

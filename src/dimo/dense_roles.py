@@ -1,5 +1,6 @@
 """Frozen Dense backbone + zero-delta student/aux adapters; three region vectors."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+import copy
 import json
 from pathlib import Path
 import torch
@@ -8,7 +9,7 @@ from .dense_teacher import load_dense_teacher_contract
 from src.explicit_region.dense_checkpoint import load_dense_weights
 
 
-class DenseDiMOModelRoles(DiMOModelRoles):
+class DenseTeacherLoRARoles(DiMOModelRoles):
     teacher_backend = "dense"
 
     def __init__(self, model):
@@ -52,7 +53,7 @@ class DenseDiMOModelRoles(DiMOModelRoles):
             raise ValueError(role)
 
 
-def initialize_dense_model_roles(base_model, teacher_checkpoint, *, lora, expected_base_identity=None):
+def initialize_dense_model_roles(base_model, teacher_checkpoint, *, lora=None, expected_base_identity=None):
     from peft import LoraConfig
     contract = load_dense_teacher_contract(teacher_checkpoint, expected_base_identity=expected_base_identity)
     if any("lora_" in n for n, _ in base_model.named_parameters()):
@@ -60,15 +61,106 @@ def initialize_dense_model_roles(base_model, teacher_checkpoint, *, lora, expect
     if any(p.dtype != torch.float32 for p in base_model.parameters()):
         raise RuntimeError("DENSE_TEACHER_BACKBONE_MUST_BE_FP32")
     load_dense_weights(base_model, teacher_checkpoint)
+    if lora is None:
+        roles = DenseDiMOModelRoles(base_model)
+        roles.teacher_contract = contract
+        return roles
     for role in ("student", "auxiliary"):
         base_model.add_adapter(LoraConfig(r=int(lora["rank"]), lora_alpha=int(lora["alpha"]),
             lora_dropout=0.0, target_modules=lora["target_modules"], init_lora_weights=True), adapter_name=role)
-    roles = DenseDiMOModelRoles(base_model)
+    roles = DenseTeacherLoRARoles(base_model)
     for name, parameter in base_model.named_parameters():
         if "lora_B" in name and bool(parameter.detach().ne(0).any()):
             raise RuntimeError("DENSE_DIMO_NONZERO_INITIAL_DELTA")
     roles.teacher_contract = contract
     return roles
+
+
+class DenseDiMOModelRoles(torch.nn.Module):
+    """Independent full FP32 roles. Frozen encoders live outside the manager."""
+    teacher_backend = "dense"
+    backend = "full_dense"
+
+    def __init__(self, teacher):
+        super().__init__()
+        if any("lora_" in n or ".adapter" in n for n, _ in teacher.named_parameters()):
+            raise RuntimeError("FULL_DENSE_CONTAINS_ADAPTER")
+        if not hasattr(teacher, "edit_region_embedding"):
+            raise RuntimeError("FULL_DENSE_REGION_EMBEDDING_MISSING")
+        if any(p.dtype != torch.float32 for p in teacher.parameters()):
+            raise RuntimeError("FULL_DENSE_PARAMETERS_MUST_BE_FP32")
+        self.models = torch.nn.ModuleDict({"teacher": teacher,
+            "student": copy.deepcopy(teacher), "auxiliary": copy.deepcopy(teacher)})
+        for role, model in self.models.items():
+            model.requires_grad_(role != "teacher")
+            model.train(role != "teacher")
+        self.audit_storage()
+
+    @property
+    def base_model(self):
+        return self.model_for("teacher")
+
+    def model_for(self, role):
+        model = self.models[role]
+        return model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+
+    def audit_storage(self):
+        storages = {role: {p.untyped_storage().data_ptr() for p in self.model_for(role).parameters()}
+                    for role in ("teacher", "student", "auxiliary")}
+        if any(storages[a] & storages[b] for a, b in (("teacher", "student"),
+                ("teacher", "auxiliary"), ("student", "auxiliary"))):
+            raise RuntimeError("FULL_DENSE_ROLE_STORAGE_OVERLAP")
+        return True
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.models["teacher"].eval()
+        return self
+
+    def wrap_ddp(self, device=None):
+        for role in ("student", "auxiliary"):
+            kwargs = {"device_ids": [device.index], "output_device": device.index} if device and device.type == "cuda" else {}
+            self.models[role] = torch.nn.parallel.DistributedDataParallel(self.models[role],
+                find_unused_parameters=False, gradient_as_bucket_view=True, **kwargs)
+
+    def activate_adapter(self, role):
+        # Shared-step API compatibility; no adapter or trainability switching.
+        if role not in self.models:
+            raise ValueError(role)
+
+    def forward_role(self, role, *, training=None, **kwargs):
+        model = self.models[role]
+        effective = False if role == "teacher" else (self.training if training is None else training)
+        model.train(effective)
+        device = next(model.parameters()).device
+        context = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
+        grad_context = torch.no_grad() if role == "teacher" else nullcontext()
+        with context, grad_context:
+            return model(**kwargs)
+
+    def forward_teacher(self, **kwargs):
+        return self.forward_role("teacher", **kwargs)
+
+    def forward_student(self, **kwargs):
+        return self.forward_role("student", **kwargs)
+
+    def forward_aux(self, **kwargs):
+        return self.forward_role("auxiliary", **kwargs)
+
+    def role_named_parameters(self, role):
+        return list(self.model_for(role).named_parameters())
+
+    def role_state_dict(self, role):
+        return {n: p.detach().cpu().contiguous().clone() for n, p in self.model_for(role).state_dict().items()}
+
+    def load_role_state_dict(self, role, state):
+        self.model_for(role).load_state_dict(state, strict=True)
+
+    def enable_gradient_checkpointing(self):
+        for role in ("student", "auxiliary"):
+            model = self.model_for(role)
+            if hasattr(model, "enable_gradient_checkpointing"):
+                model.enable_gradient_checkpointing()
 
 
 def initial_logits_parity(roles, kwargs, *, atol=0.0, rtol=0.0):
@@ -95,6 +187,8 @@ def initialize_teacher_roles(base_model, checkpoint, *, model_roles=None, teache
     if teacher_backend is not None and teacher_backend != detected:
         raise RuntimeError("DIMO_TEACHER_BACKEND_MISMATCH")
     if detected == "dense":
+        if model_roles and model_roles.get("backend") == "full_dense":
+            return initialize_dense_model_roles(base_model, checkpoint)
         return initialize_dense_model_roles(base_model, checkpoint, lora={"rank": 64, "alpha": 64,
             "target_modules": ["to_q", "to_k", "to_v", "to_out.0", "ff.net.2", "proj_mlp", "proj_out"]})
     return initialize_shared_model_roles(base_model, checkpoint, model_roles=model_roles)

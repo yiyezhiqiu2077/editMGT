@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Real role-gradient allreduce + complete resume. Prep-only, at most 2 steps.
+"""Full-Dense config dispatch plus legacy two-step LoRA preparation.
 
-This is a separate distributed preparation entry, not a formal DiMO launcher.
-No mathematical changes to complete_dimo_step. Gradient averaging is installed
-before each optimizer update; student and auxiliary remain separately isolated.
+Full-Dense configurations use train_full_dense_dimo. The legacy preparation
+path retains explicit gradient averaging and its original two-step limit.
 """
 import argparse
 import functools
@@ -134,4 +133,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument("--config", default="configs/dimo/full_dense_d200k.yaml")
+    selected, _ = probe.parse_known_args()
+    from src.explicit_region.config import _load_unexpanded
+    if _load_unexpanded(Path(selected.config)).get("model_roles", {}).get("backend") == "full_dense":
+        from scripts.train.train_full_dense_dimo import main as full_main
+        full_main()
+    else:
+        main()

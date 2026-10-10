@@ -13,7 +13,7 @@ if [[ $# -gt 0 ]]; then
   resume=(--resume "$2")
 fi
 uv run python scripts/train/verify_e3_dense_config.py --static
-command=(uv run accelerate launch --multi_gpu --num_processes 8 --mixed_precision bf16
+command=(env -u GH_TOKEN uv run accelerate launch --multi_gpu --num_processes 8 --mixed_precision bf16
   --gpu_ids 0,1,2,3,4,5,6,7 --main_process_port "${DENSE_MASTER_PORT:-29671}"
   scripts/train/train_dense_region.py --config configs/train/dense_d200k_5epoch.yaml "${resume[@]}")
 if [[ "$mode" == --print-command ]]; then

@@ -4,6 +4,7 @@ steps: 12
 guidance_scale: 10.0
 reference_strength: 1.0
 generation_seeds: [0, 1, 2, 3]
-bootstrap: {seed: 42, resamples: 10000, unit: sample_after_seed_mean}
+bootstrap: {seed: 42, resamples: 10000, unit: source_group_cluster, confidence_level: 0.95}
 selection: {status: DIAGNOSTIC_ONLY, threshold_preserve: null, tau_edit: null, tau_noop: null}
 embedding_models: {}
+latency: {warmup: 1, repeats: 3}

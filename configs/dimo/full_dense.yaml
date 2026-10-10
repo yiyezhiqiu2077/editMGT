@@ -1,0 +1,36 @@
+extends: base.yaml
+experiment: Full-DenseDiMO-FKL-v1
+formal_ready: true
+teacher_backend: dense
+model_roles:
+  backend: full_dense
+  student_trainable_scope: full_transformer_and_region
+  auxiliary_trainable_scope: full_transformer_and_region
+  lora: false
+distributed: {backend: ddp, world_size: 8, timeout_seconds: 600, control_timeout_seconds: 7200}
+component_dtypes:
+  teacher: fp32
+  student: fp32
+  auxiliary: fp32
+  gradients: fp32
+  adamw_moments: fp32
+  ema: fp32
+  forward: bf16_autocast
+surrogate: {implementation: linear, version: roi-vocabulary-sum-v1}
+ema: {enabled: true, decay: 0.9995, device: cuda}
+optimizer: {scheduler: constant, horizon_steps: 25000}
+epochs: 1
+batch_per_gpu: 1
+gradient_accumulation: 1
+max_optimizer_steps: 25000
+diagnostic_interval: 100
+resume_checkpoint_steps: [500, 5000, 10000, 15000, 20000, 25000]
+evaluation_steps: [0, 500, 2500, 5000, 10000, 15000, 20000, 25000]
+monitor: {interval: 500, assets: [loss, gradient]}
+output_dir: ${DIMO_OUTPUT_ROOT}
+token_mask: {mode: any_overlap, coverage_threshold: 0.5, dilation_tokens: 0, minimum_edit_tokens: 1}
+geometry: {max_resample_attempts: 8, minimum_mask_retention: 0.75}
+num_workers: 0
+parity: {atol: 0.00001, rtol: 0.00001}
+evaluation:
+  plan: ${DIMO_DEV_PLAN}
