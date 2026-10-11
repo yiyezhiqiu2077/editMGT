@@ -1,6 +1,6 @@
 model_root: ${EDITMGT_MODEL_ROOT}
 teacher_checkpoint: ${DIMO_TEACHER_CHECKPOINT}
-inference_config: configs/eval/dense_dev.yaml
+inference_config: configs/eval/full_dense_dimo.yaml
 group_identity_contract: ${DENSE_GROUP_IDENTITY_CONTRACT}
 datasets:
   - name: magicbrush

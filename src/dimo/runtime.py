@@ -34,7 +34,7 @@ def validate_full_config(config, *, synthetic=False):
     if config["component_dtypes"] != {"teacher": "fp32", "student": "fp32", "auxiliary": "fp32",
             "gradients": "fp32", "adamw_moments": "fp32", "ema": "fp32", "forward": "bf16_autocast"}:
         raise RuntimeError("FULL_DIMO_PRECISION_RECIPE_CHANGED")
-    if config["initialization"] != ({"mask_ratio": 1., "random_tokens_inside_roi": False} if magic else {"mask_ratio": .5, "random_tokens_inside_roi": True}):
+    if config["initialization"] != {"mask_ratio": 1., "random_tokens_inside_roi": False}:
         raise RuntimeError("FULL_DIMO_INITIALIZATION_RECIPE_CHANGED")
     if config["sampling"] != {"temperature": 1., "top_k": 0, "top_p": 0.}:
         raise RuntimeError("FULL_DIMO_SAMPLING_RECIPE_CHANGED")

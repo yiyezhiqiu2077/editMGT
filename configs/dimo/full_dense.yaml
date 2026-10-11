@@ -2,6 +2,9 @@ extends: base.yaml
 experiment: Full-DenseDiMO-FKL-v1
 formal_ready: true
 teacher_backend: dense
+initialization:
+  mask_ratio: 1.0
+  random_tokens_inside_roi: false
 model_roles:
   backend: full_dense
   student_trainable_scope: full_transformer_and_region

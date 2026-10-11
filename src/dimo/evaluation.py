@@ -13,10 +13,23 @@ from .one_step import one_step_edit_tokens
 from .rng import stable_seed, normal_noise_per_sample
 
 
+def evaluation_r_init(config, training_initialization=None):
+    """Explicit evaluation initialization, optionally bound to trained recipe."""
+    if "r_init" not in config:
+        raise RuntimeError("DIMO_EVALUATION_R_INIT_REQUIRED")
+    ratio = float(config["r_init"])
+    if not 0 <= ratio <= 1:
+        raise ValueError("DIMO_EVALUATION_R_INIT_OUT_OF_RANGE")
+    if training_initialization is not None and ratio != float(training_initialization["mask_ratio"]):
+        raise RuntimeError("DIMO_EVALUATION_INITIALIZATION_MISMATCH")
+    return ratio
+
+
 @torch.inference_mode()
 def generate_one_step_evaluation(components, roles, *, manifest, canonical_root, dataset_name,
         config, output_dir, group_contract, device="cuda", count=None):
     from scripts.train.train_dimo_editing import prepare_batch
+    r_init = evaluation_r_init(config)
     rows = read_rows(manifest)
     if any("test" in str(row.get("split", "")).lower() for row in rows):
         raise RuntimeError("DIMO_DEV_MANIFEST_CONTAINS_TEST")
@@ -48,7 +61,7 @@ def generate_one_step_evaluation(components, roles, *, manifest, canonical_root,
                 generated = one_step_edit_tokens(roles, source_tokens=tokens,
                     edit_region_mask=prepared["edit_region_mask"], prompt_condition=prepared["prompt_condition"],
                     timestep_model_kwargs=prepared["model_kwargs"], mask_token_id=roles.base_model.config.vocab_size-1,
-                    codebook_size=roles.base_model.config.codebook_size, r_init=.5,
+                    codebook_size=roles.base_model.config.codebook_size, r_init=r_init,
                     init_mask_seeds=stable_seed(*seed_args, "dimo-init-mask"),
                     init_token_seeds=stable_seed(*seed_args, "dimo-init-token"),
                     sample_seeds=stable_seed(*seed_args, "dimo-student-sample"),
@@ -75,7 +88,7 @@ def generate_one_step_evaluation(components, roles, *, manifest, canonical_root,
                 "geometry": item["geometry"], "manifest_sha256": sha256_file(manifest),
                 "runtime_seconds": latency["mean_seconds"], "latency_protocol": latency,
                 "transformer_forward_count": 1, "token_outside_lock": "PASS", "pixel_outside_lock": "NOT_GUARANTEED",
-                "inference_protocol": {"cfg": 1., "steps": 1, "temperature": 1., "r_init": .5, "sigma": .3}})
+                "inference_protocol": {"cfg": 1., "steps": 1, "temperature": 1., "r_init": r_init, "sigma": .3}})
     path = out / "predictions.jsonl"
     path.write_text("".join(json.dumps(row, sort_keys=True)+"\n" for row in predictions))
     return path

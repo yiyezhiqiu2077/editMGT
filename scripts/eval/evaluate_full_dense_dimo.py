@@ -16,7 +16,7 @@ from src.explicit_region.dense_evaluation import assert_matching_predictions, co
 from src.explicit_region.modeling import load_released_components
 from src.dimo.contracts import released_base_model_identity, teacher_bundle_fingerprint
 from src.dimo.inference import load_dense_inference_role
-from src.dimo.evaluation import generate_one_step_evaluation
+from src.dimo.evaluation import generate_one_step_evaluation, evaluation_r_init
 from scripts.eval.formal_eval import evaluate
 
 
@@ -35,9 +35,15 @@ def main():
         config["latency"] = {"warmup": 0, "repeats": 1}
     contract = json.loads(Path(plan["group_identity_contract"]).read_text())
     root = Path(a.run_root)
+    run_identity = json.loads((root / "experiment_manifest.json").read_text())
+    # Older exports bind initialization through their resolved config; newer
+    # identities record it directly. Never silently evaluate a different r_init.
+    initialization = run_identity.get("initialization")
+    if initialization is None:
+        initialization = json.loads((root / "resolved_config.json").read_text())["initialization"]
+    evaluation_r_init(config, initialization)
     output = root / "evaluation" / ("diagnostic" if a.diagnostic_count else "full_dev")
     output.mkdir(parents=True, exist_ok=True)
-    run_identity = json.loads((root / "experiment_manifest.json").read_text())
     evaluation_identity = {"run_identity": run_identity, "plan_sha256": recipe_fingerprint(plan),
         "inference_sha256": recipe_fingerprint(config), "diagnostic_count": a.diagnostic_count,
         "manifest_sha256": {d["name"]: sha256_file(d["manifest"]) for d in plan["datasets"]},

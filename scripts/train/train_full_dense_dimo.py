@@ -148,7 +148,8 @@ def main():
         identity = {"schema": "full-dense-dimo-identity-v2", "teacher_bundle_fingerprint": bundle,
             "data_sha256": data_hash, "config_sha256": recipe_fingerprint(config), "git_sha": git_sha,
             "world_size": world, "backend": "ddp", "surrogate": config["surrogate"],
-            "precision": config["component_dtypes"], "formal": not args.synthetic and not is_magicbrush(config)}
+            "precision": config["component_dtypes"], "initialization": config["initialization"],
+            "formal": not args.synthetic and not is_magicbrush(config)}
         if is_magicbrush(config):
             identity.update(experiment_mode=config['experiment_mode'],initialization=config['initialization'],
                             teacher_source=record['teacher_source'],selection_scope='magicbrush_exploratory')
@@ -298,21 +299,9 @@ def main():
                 checkpoint()
             if commit.step in config["evaluation_steps"]:
                 checkpoint(inference_only=True)
-            # MagicBrush coordinator evaluates between complete resume segments,
-            # after all four CUDA workers exit. No extra model occupies VRAM
-            # beside two live optimizers and the three Dense roles.
-            if not args.synthetic and not is_magicbrush(config) and commit.step == 500:
-                # Only rank0 uses existing student/EMA exports in a separate
-                # evaluation process. Preserve all training RNG on every rank.
-                error = None
-                if rank == 0:
-                    try:
-                        subprocess.run([sys.executable, str(ROOT / "scripts/eval/evaluate_full_dense_dimo.py"),
-                            "--plan", config["evaluation"]["plan"], "--run-root", str(output), "--steps", "500",
-                            "--diagnostic-count", "4"], check=True)
-                    except Exception as exc:
-                        error = str(exc)
-                collective_status(error)
+            # DEV runs are launched separately. In particular, step500 saves
+            # its complete checkpoint/inference exports without spawning an
+            # evaluator alongside live Student/Auxiliary optimizers and EMA.
         if commit.step != stop:
             raise RuntimeError("FULL_DIMO_DATA_EXHAUSTED_BEFORE_HORIZON")
         if is_magicbrush(config) and stop == 0:

@@ -58,3 +58,21 @@ runs followed by `scripts/train/compare_full_dense_resume.py`.
 
 Executable stage commands: [EXPERIMENTS.md](EXPERIMENTS.md).
 Algorithm/state details: [FULL_DENSE_PROTOCOL.md](FULL_DENSE_PROTOCOL.md).
+
+## 2026-10-11 formal recipe revision
+
+The formal Full DenseDiMO template now declares r_init=1.0 and no random ROI VQ
+tokens; formal Student/EMA evaluation explicitly matches the saved training
+initialization. The step500 automatic four-case DEV subprocess is removed;
+checkpoint/inference exports, manual DEV and 500-step curve monitoring remain.
+Historical r_init=0.5 validation above does not establish acceptance of the
+revised formal D200K recipe. Its actual eight-GPU/D200K CUDA acceptance remains
+NOT_TESTED. The active four-A800 MagicBrush run stays on its original code SHA
+while this change is prepared in an isolated detached worktree on the same
+maintenance branch; no new experiment branch or new training run is created.
+
+Revision checks: 75 related CPU tests passed, including all-MASK one-forward
+inference/outside-token lock, explicit evaluation recipe matching and two-process
+Gloo fresh/resume full-state equivalence and transaction-failure tests.
+Python compileall and git diff --check passed. These are CPU/config checks, not
+formal eight-GPU acceptance.

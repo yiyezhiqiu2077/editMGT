@@ -103,6 +103,9 @@ AdamW=(0.9,0.999)、WD=0、constant/no warmup；EMA=0.9995。
 角色参数、梯度、AdamW moments 和 EMA 均 FP32；forward BF16 autocast。
 正式 objective：linear/roi-vocabulary-sum-v1；平方实现保留兼容。
 FKL、sampling、pseudo-mask、noise、reference conditioning 使用固定配置。
+正式 D200K 的训练与 Student/EMA 推理均使用 `r_init=1.0`：ROI 全部 MASK，
+ROI 外 source token 保持不变，无 ROI 随机 VQ token。LoRA reference defaults 保留原样。
+该初始化改变训练配方；此前 `r_init=0.5` 的 DiMO optimizer checkpoint 不能作为同配方直接续训。
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -117,7 +120,8 @@ bash scripts/train/run_full_dense_dimo.sh --run \
 推理导出：0、500、2500、5000、10000、15000、20000、25000。
 不为每 500 步监控保存全模型；step500 是首次验收的独立恢复点。
 首次 step1/20 验证角色、梯度、首次 optimizer states、EMA、rank/cursor 和真实 logits 梯度。
-step500 执行固定四例 DEV diagnostic 后继续同一训练任务，不重启 step0。
+step500 保存完整 checkpoint 和推理导出，不在训练进程内自动启动 DEV。
+DEV 由独立命令运行；step500 的手动评测能力与每 500 步曲线监控保留。
 两 optimizer、EMA 完成且 rank 检查通过后才 commit step/cursor。
 失败不假装内存回滚；必须重新加载最近完整 checkpoint。
 NaN/Inf、OOM、rank mismatch、身份/数据/状态错误停止所有 rank。
@@ -136,6 +140,8 @@ uv run python scripts/eval/evaluate_full_dense_dimo.py \
 
 输出：`$DIMO_OUTPUT_ROOT/evaluation/full_dev/`。
 Teacher 多步、Raw Student 和 EMA 单步分别评测；推理只加载需要的一个 Dense role。
+Student/EMA 使用 `configs/eval/full_dense_dimo.yaml` 的显式 `r_init=1.0`，
+评测前必须与 checkpoint 的训练初始化一致；不一致时停止，不静默覆盖。
 Inside 对 target；Outside preservation 对 source；算法说明见 `FULL_DENSE_PROTOCOL.md`。
 token hard-lock 不保证 VQ 解码像素保持。固定 UID、mask、geometry、seed。
 计时包含编码/Transformer/VQ解码，排除 canonical geometry 和图像文件 I/O。

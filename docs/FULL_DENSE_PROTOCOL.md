@@ -73,6 +73,15 @@ and divergence must be finite BEFORE any replacement; nan_to_num is not used.
 Initial teacher/auxiliary parity can give exactly zero student gradient at step1.
 That step can succeed; zero parameter displacement is not a failure criterion.
 
+Full DenseDiMO training and formal Student/EMA evaluation use `r_init=1.0`:
+all editable ROI tokens are MASK, with no random VQ tokens inside ROI; source
+tokens outside ROI are unchanged. This overrides the LoRA reference defaults
+in `base.yaml`, not the variable Teacher/Auxiliary pseudo-mask cosine schedule.
+The resolved config and new inference identities bind initialization. Evaluation
+requires an explicit matching r_init; older identities use their saved resolved
+training config. A historical r_init=0.5 optimizer checkpoint is not an exact
+resume of the new all-MASK recipe. Existing config/code identity gates reject it.
+
 ## Commit, checkpoint and memory
 
 Commit is owned by StepCommit. Two backward/optimizer/scheduler sequences and
@@ -116,7 +125,7 @@ checks before reuse. Offline compare_full_dense_resume checks all tensors and
 training states, including each rank RNG, without allocating Dense GPU models.
 
 Control/status collectives use a separate Gloo group with a two-hour timeout,
-so rank0's large checkpoint I/O or step500 local evaluation does not expire a
+so rank0's large checkpoint I/O does not expire a
 short NCCL timeout on waiting ranks. Gradient collectives retain NCCL. A stalled
 worker is still subject to the configured process-group deadlines.
 
@@ -146,6 +155,11 @@ Gemma, VQ encode, Transformer and VQ decode separately, plus total generation
 call time. Dataset geometry and image file I/O are outside total latency;
 pipeline preprocessing/sampling is included in the unassigned remainder.
 Transformer forward counts are measured, not inferred from requested steps.
+
+The training process does not automatically launch DEV at step500. Its complete
+recovery checkpoint and Student/EMA inference exports remain registered, and
+standalone manual DEV at step500 remains supported. Curve monitoring still runs
+every 500 committed updates. Evaluation is launched separately from training.
 
 ## Monitor and report
 

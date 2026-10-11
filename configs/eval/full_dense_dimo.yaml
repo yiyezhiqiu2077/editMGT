@@ -1,0 +1,3 @@
+extends: dense_dev.yaml
+# Match the all-MASK initialization used by Full DenseDiMO training.
+r_init: 1.0
