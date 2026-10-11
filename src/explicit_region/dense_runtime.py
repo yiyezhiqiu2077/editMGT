@@ -41,9 +41,12 @@ class DenseEpochLoader(MultiEpochFixedLoader):
 
 def validate_dense_config(config, *, formal=False):
     from .magicbrush_experiment import is_magicbrush, validate_magicbrush_budget
+    from .mixed_experiment import is_mixed, validate_mixed_budget
     magic = is_magicbrush(config)
+    mixed = is_mixed(config)
+    horizon = (10 if magic else 5) * config['data']['expected_rows'] // 16 if magic or mixed else 31250
     expected = {"training_mode": "full_transformer", "precision": "bf16", "resolution": 1024,
-                "batch_per_gpu": 1, "gradient_accumulation": 4, "scheduler_horizon_steps": 10*config['data']['expected_rows']//16 if magic else 31250,
+                "batch_per_gpu": 1, "gradient_accumulation": 4, "scheduler_horizon_steps": horizon,
                 "warmup_steps": 200, "gradient_checkpointing": True, "attention_backend": "math_sdp"}
     for key, value in expected.items():
         if config.get(key) != value:
@@ -70,6 +73,9 @@ def validate_dense_config(config, *, formal=False):
     if magic:
         if formal: raise RuntimeError('MAGICBRUSH_CANNOT_USE_D200K_FORMAL_GATE')
         validate_magicbrush_budget(config, 'sft')
+    if mixed:
+        if formal: raise RuntimeError('MIXED_CANNOT_USE_D200K_FORMAL_GATE')
+        validate_mixed_budget(config)
     return {"status": "PASS", "config_sha256": recipe_fingerprint(config)}
 
 
@@ -256,7 +262,14 @@ def readonly_reattest(config, output, *, git_sha, full_loader=True):
         ready = verify_corpus_ready(ready_path)
         frozen, rows, validation = frozen_identity(ready)
     else:
-        ready = verify_mini_corpus_ready(ready_path, expected_rows=data["expected_rows"])
+        from .mixed_experiment import is_mixed, verify_mixed_ready
+        from .magicbrush_experiment import is_magicbrush, verify_magicbrush_ready
+        if is_mixed(config):
+            ready = verify_mixed_ready(config)
+        elif is_magicbrush(config):
+            ready = verify_magicbrush_ready(config)
+        else:
+            ready = verify_mini_corpus_ready(ready_path, expected_rows=data["expected_rows"])
         rows = read_rows(data["manifest"])
         frozen = {"train_sha256": sha256_file(data["manifest"]), "rows": len(rows)}
         validation = {"periodic": Path(config["validation"]["manifest"])} if config["validation"].get("enabled") else {}

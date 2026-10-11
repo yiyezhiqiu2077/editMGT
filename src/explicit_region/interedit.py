@@ -93,7 +93,10 @@ class TarMemberReader:
             path.relative_to(self.root.resolve())
         except ValueError as exc:
             raise ValueError(f"archive escapes Inter-Edit root: {archive}") from exc
-        handle = self._handles.setdefault(path, tarfile.open(path, "r:*"))
+        handle = self._handles.get(path)
+        if handle is None:
+            handle = tarfile.open(path, "r:*")
+            self._handles[path] = handle
         extracted = handle.extractfile(member)
         if extracted is None:
             raise FileNotFoundError(f"{member} not found in {path}")

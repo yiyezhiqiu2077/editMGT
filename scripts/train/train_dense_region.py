@@ -35,16 +35,21 @@ from src.explicit_region.fixed_corpus import verify_corpus_ready, verify_mini_co
 from src.explicit_region.fixed_dataset import FixedCorpusDataset
 from src.explicit_region.modeling import load_released_components
 from src.explicit_region.magicbrush_experiment import is_magicbrush, verify_magicbrush_ready
+from src.explicit_region.mixed_experiment import is_mixed, verify_mixed_ready
 
 
 def dense_fingerprint(config, identity, released_audit):
     # The reused fingerprint preserves the exact old data/RNG/math contract.
     compatible = dict(config, lora={"enabled": False})
     result = fingerprint_payload(compatible, identity)
-    if is_magicbrush(config):
+    if is_magicbrush(config) or is_mixed(config):
         from src.explicit_region.dense_checkpoint import verify_dense_checkpoint
         result['warm_start_dense_identity'] = verify_dense_checkpoint(config['initial_dense_checkpoint'])['checkpoint_sha256']
         result['experiment_mode'] = config['experiment_mode']
+        if is_mixed(config):
+            from src.explicit_region.epoch_sampler import SAMPLER_SCHEMA_VERSION
+            result['sampler_schema'] = SAMPLER_SCHEMA_VERSION
+            result['continuation'] = config['continuation']
     return result | {"schema": "dense-e3-fp32-recipe-v1", "training_mode": "full_transformer",
                      "released_weight_hashes": released_audit["files"],
                      "dense": config["dense"], "max_optimizer_steps": config["max_optimizer_steps"]}
@@ -60,6 +65,9 @@ def build_loader(config, accelerator, resume=None):
         verify_mini_corpus_ready(data["corpus_ready"], expected_rows=expected)
     elif is_magicbrush(config):
         verify_magicbrush_ready(config)
+        expected = data['expected_rows']
+    elif is_mixed(config):
+        verify_mixed_ready(config)
         expected = data['expected_rows']
     else:
         raise RuntimeError("DENSE_REQUIRES_FROZEN_CORPUS")
@@ -121,10 +129,10 @@ def main():
         gradient_accumulation_steps=config["gradient_accumulation"], step_scheduler_with_optimizer=False,
         kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True,
                                                        gradient_as_bucket_view=True)])
-    required_world = 4 if is_magicbrush(config) else 8
+    required_world = 4 if is_magicbrush(config) or is_mixed(config) else 8
     if accelerator.device.type != "cuda" or accelerator.num_processes != required_world:
-        raise RuntimeError("REAL_DENSE_E3_REQUIRES_EXCLUSIVE_8_GPU_ALLOCATION")
-    if is_magicbrush(config):
+        raise RuntimeError(f"REAL_DENSE_E3_REQUIRES_EXCLUSIVE_{required_world}_GPU_ALLOCATION")
+    if required_world == 4:
         from src.dimo.runtime import gpu_admission
         gpu_admission(magicbrush=True)
     output = Path(args.output_dir or config["output_dir"])
@@ -140,10 +148,10 @@ def main():
     audit = audit_released_fp32(config["model"]["repo_or_root"])
     components = load_released_components(config["model"]["repo_or_root"], torch_dtype=torch.bfloat16,
                                           transformer_dtype=torch.float32, vq_dtype=torch.float32)
-    if is_magicbrush(config):
+    if is_magicbrush(config) or is_mixed(config):
         from src.explicit_region.dense_checkpoint import load_dense_weights
         from src.explicit_region.dense_inference import check_base_identity
-        verify_magicbrush_ready(config)
+        (verify_mixed_ready if is_mixed(config) else verify_magicbrush_ready)(config)
         check_base_identity(config['initial_dense_checkpoint'], components.identity)
         direct = load_dense_weights(components.transformer, config['initial_dense_checkpoint'])
         direct = dict(direct, mode='full_fp32_dense_warm_start', optimizer_inherited=False)
