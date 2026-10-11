@@ -9,10 +9,15 @@ import torch
 
 def validate_full_config(config, *, synthetic=False):
     from src.explicit_region.magicbrush_experiment import is_magicbrush, validate_magicbrush_budget
+    from .mixed_experiment import is_mixed_dimo, validate_budget
     magic = is_magicbrush(config)
+    mixed = is_mixed_dimo(config)
     if magic:
         if synthetic: raise RuntimeError('MAGICBRUSH_REQUIRES_REAL_DATA_AND_GPUS')
         validate_magicbrush_budget(config, 'dimo')
+    if mixed:
+        if synthetic: raise RuntimeError('MIXED_DIMO_REQUIRES_REAL_DATA_AND_GPUS')
+        validate_budget(config)
     if config["model_roles"]["backend"] != "full_dense" or config["distributed"]["backend"] != "ddp":
         raise RuntimeError("FULL_DIMO_REQUIRES_FULL_DENSE_DDP")
     expected = {"student_learning_rate": 1e-6, "auxiliary_learning_rate": 1e-6,
@@ -23,9 +28,9 @@ def validate_full_config(config, *, synthetic=False):
         raise RuntimeError("FULL_DIMO_EMA_RECIPE_CHANGED")
     if config["surrogate"] != {"implementation": "linear", "version": "roi-vocabulary-sum-v1"}:
         raise RuntimeError("FULL_DIMO_SURROGATE_NOT_FROZEN")
-    if (config["batch_per_gpu"], config["gradient_accumulation"], config["epochs"]) != (1, 1, 10 if magic else 1):
+    if (config["batch_per_gpu"], config["gradient_accumulation"], config["epochs"]) != (1, 1, 5 if mixed else 10 if magic else 1):
         raise RuntimeError("FULL_DIMO_BATCH_RECIPE_CHANGED")
-    if not synthetic and not magic and (config["max_optimizer_steps"], config["distributed"]["world_size"], config["data"]["expected_rows"], config["formal_ready"]) != (25000, 8, 200000, True):
+    if not synthetic and not magic and not mixed and (config["max_optimizer_steps"], config["distributed"]["world_size"], config["data"]["expected_rows"], config["formal_ready"]) != (25000, 8, 200000, True):
         raise RuntimeError("FULL_DIMO_FORMAL_HORIZON_OR_DATA_CHANGED")
     if synthetic and (config["formal_ready"] or config["data"]["name"] != "synthetic"):
         raise RuntimeError("SYNTHETIC_CANNOT_BE_FORMAL")
@@ -109,7 +114,12 @@ class MemoryRecorder:
             handle.write(json.dumps(row) + "\n")
 
 
-def disk_budget(parameters, config, output):
+def disk_budget(parameters, config, output, *, stop_at=None):
+    from .mixed_experiment import is_mixed_dimo
+    if is_mixed_dimo(config):
+        from .mixed_storage import segment_budget
+        return segment_budget(parameters, config, output,
+                              config['max_optimizer_steps'] if stop_at is None else stop_at)
     # Two FP32 roles+EMA (12P bytes), two AdamW pairs (16P bytes).
     resume_bytes = 28 * parameters
     inference_bytes = 8 * parameters

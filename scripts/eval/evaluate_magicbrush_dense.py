@@ -34,7 +34,7 @@ def generate(plan, manifest, checkpoint, output, *, weights=None):
         bundle=teacher_bundle_fingerprint(plan['teacher_checkpoint'],
             base_model_identity=released_base_model_identity(components.identity),formal=False)
         roles,identity=load_dense_inference_role(components.transformer,checkpoint,weights=weights,teacher_bundle=bundle)
-        if identity.get('experiment_mode')!='magicbrush_exploratory' or identity.get('initialization')!={'mask_ratio':1.,'random_tokens_inside_roi':False}:
+        if identity.get('experiment_mode') not in ('magicbrush_exploratory', 'mixed20k_last_sft_dimo') or identity.get('initialization')!={'mask_ratio':1.,'random_tokens_inside_roi':False}:
             raise RuntimeError('MAGICBRUSH_ONE_STEP_TRAIN_INFERENCE_IDENTITY_MISMATCH')
         roles.to('cuda').eval()
         freeze_modules([components.text_encoder,components.llm_encoder,components.vqvae])

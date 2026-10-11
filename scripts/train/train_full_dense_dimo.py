@@ -32,6 +32,7 @@ from src.dimo.runtime import validate_full_config, validate_output, gpu_admissio
 from src.dimo.transaction import StepCommit, collective_status, sampled_rank_state, set_control_group
 from src.dimo.step import complete_dimo_step
 from src.explicit_region.magicbrush_experiment import is_magicbrush, verify_magicbrush_ready
+from src.dimo.mixed_experiment import is_mixed_dimo, verify_ready as verify_mixed_dimo_ready, verify_teacher_record
 
 
 def main():
@@ -54,7 +55,8 @@ def main():
                           (("WORLD_SIZE", "1"), ("RANK", "0"), ("LOCAL_RANK", "0")))
     if world != config["distributed"]["world_size"]:
         raise RuntimeError("FULL_DIMO_WORLD_SIZE_MISMATCH")
-    required_world = 4 if is_magicbrush(config) else 8
+    exploratory = is_magicbrush(config) or is_mixed_dimo(config)
+    required_world = 4 if exploratory else 8
     if not args.synthetic and (not torch.cuda.is_available() or torch.cuda.device_count() < required_world):
         raise RuntimeError("FULL_DIMO_FORMAL_REQUIRES_8_VISIBLE_GPUS")
     if args.synthetic:
@@ -83,7 +85,7 @@ def main():
     commit = StepCommit()
     try:
         if not args.synthetic:
-            admission = gpu_admission(magicbrush=is_magicbrush(config))
+            admission = gpu_admission(magicbrush=exploratory)
             write_json(output / f"gpu_admission_rank{rank}.json", admission)
         if args.synthetic:
             from src.dimo.synthetic import SyntheticDenseTransformer, SyntheticDataset, synthetic_batch
@@ -99,16 +101,24 @@ def main():
             from src.explicit_region.fixed_corpus import verify_corpus_ready
             from src.dimo.contracts import released_base_model_identity, teacher_bundle_fingerprint
             from scripts.train.train_dimo_editing import prepare_batch
-            ready = verify_magicbrush_ready(config) if is_magicbrush(config) else verify_corpus_ready(config["data"]["corpus_ready"])
+            ready = (verify_mixed_dimo_ready(config) if is_mixed_dimo(config) else
+                     verify_magicbrush_ready(config) if is_magicbrush(config) else verify_corpus_ready(config["data"]["corpus_ready"]))
             manifest_hash = sha256_file(config["data"]["manifest"])
             if ready.get("train_manifest_sha256") != manifest_hash:
                 raise RuntimeError("FULL_DIMO_CORPUS_READY_MANIFEST_MISMATCH")
             components = load_released_components(config["model"]["repo_or_root"],
                 torch_dtype=torch.bfloat16, transformer_dtype=torch.float32, vq_dtype=torch.float32)
             base = released_base_model_identity(components.identity)
-            bundle = teacher_bundle_fingerprint(config["teacher_checkpoint"], base_model_identity=base, formal=not is_magicbrush(config))
+            bundle = teacher_bundle_fingerprint(config["teacher_checkpoint"], base_model_identity=base, formal=not exploratory)
             record = json.loads((Path(config["teacher_checkpoint"]) / "selection_record.json").read_text())
-            if is_magicbrush(config):
+            if is_mixed_dimo(config):
+                from src.explicit_region.dense_checkpoint import verify_dense_checkpoint
+                verify_teacher_record(record, verify_dense_checkpoint(config['teacher_checkpoint'])['checkpoint_sha256'])
+                if (record['authorization_sha256'] != sha256_file(config['user_transition_record'])
+                        or record['data_identity']['train_manifest_sha256'] != manifest_hash
+                        or record['data_identity']['corpus_ready_sha256'] != sha256_file(config['data']['corpus_ready'])):
+                    raise RuntimeError('MIXED_DIMO_TEACHER_TRAIN_IDENTITY_CHANGED')
+            elif is_magicbrush(config):
                 from src.dimo.magicbrush_selection import verify_selection_record
                 from src.explicit_region.dense_checkpoint import verify_dense_checkpoint
                 verify_selection_record(record, verify_dense_checkpoint(config['teacher_checkpoint'])['checkpoint_sha256'])
@@ -149,10 +159,15 @@ def main():
             "data_sha256": data_hash, "config_sha256": recipe_fingerprint(config), "git_sha": git_sha,
             "world_size": world, "backend": "ddp", "surrogate": config["surrogate"],
             "precision": config["component_dtypes"], "initialization": config["initialization"],
-            "formal": not args.synthetic and not is_magicbrush(config)}
-        if is_magicbrush(config):
+            "formal": not args.synthetic and not exploratory}
+        if exploratory:
             identity.update(experiment_mode=config['experiment_mode'],initialization=config['initialization'],
-                            teacher_source=record['teacher_source'],selection_scope='magicbrush_exploratory')
+                            teacher_source=record['teacher_source'],selection_scope=record['selection_scope'])
+            if is_mixed_dimo(config):
+                identity['authorization_sha256'] = sha256_file(config['user_transition_record'])
+                identity['selected_sft_step'] = record['selected_step']
+            # Selection metadata above is part of the immutable inference identity.
+
         if rank == 0:
             manifest_path = output / "experiment_manifest.json"
             if manifest_path.exists() and json.loads(manifest_path.read_text()) != identity:
@@ -162,12 +177,12 @@ def main():
             write_json(manifest_path, identity)
             write_json(output / "resolved_config.json", config)
             write_json(output / "parameter_report.json", parameter_report)
-            write_json(output / "disk_budget.json", disk_budget(parameter_report["student_trainable"], config, output))
+            write_json(output / "disk_budget.json", disk_budget(parameter_report["student_trainable"], config, output, stop_at=args.stop_at_global_step))
         collective_status()
         generator = torch.Generator().manual_seed(config["seed"] + 10000)
         resumed = None
         if args.resume:
-            if is_magicbrush(config):
+            if exploratory:
                 # Prime the real DDP backward/bucket topology without any
                 # optimizer or EMA update. Loading below restores every RNG.
                 from torch.utils.data import default_collate
@@ -257,7 +272,7 @@ def main():
                 # at preregistered diagnostics, avoiding full state copies.
                 if next_step in (1, 20) or next_step % config["diagnostic_interval"] == 0:
                     sampled_rank_state(roles, optimizers, schedulers, ema, next_step, next_cursor)
-                if is_magicbrush(config) and next_step in (2,20):
+                if exploratory and next_step in (2,20):
                     from src.explicit_region.dense_runtime import assert_rank_parameters
                     for role in ('student','auxiliary'):
                         check=assert_rank_parameters(roles.model_for(role))
@@ -272,7 +287,7 @@ def main():
                 config=config, phase_callback=stage, failure_injector=failure if args.inject_failure else None),
                 samples=world, finalize=finalize, failure_injector=failure if args.inject_failure else None)
             sampler.samples_consumed_in_epoch = commit.cursor - sampler.epoch * len(dataset)
-            if is_magicbrush(config):
+            if exploratory:
                 append_committed_log(output/f'trace_rank{rank}.jsonl',{'global_step':commit.step,
                     'sample_uids':prepared['sample_uids'],'epoch':sampler.epoch,'global_cursor':commit.cursor})
             # Logging is after complete-step commit; monitor never participates.
@@ -304,7 +319,7 @@ def main():
             # evaluator alongside live Student/Auxiliary optimizers and EMA.
         if commit.step != stop:
             raise RuntimeError("FULL_DIMO_DATA_EXHAUSTED_BEFORE_HORIZON")
-        if is_magicbrush(config) and stop == 0:
+        if exploratory and stop == 0:
             checkpoint()
         write_json(output / f"runtime_acceptance_rank{rank}.json", {"status": "PASS", "step": commit.step,
             "world_size": world, "evidence": "CPU_SYNTHETIC" if args.synthetic else "REAL_GPU",

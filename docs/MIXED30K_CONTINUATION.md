@@ -1,5 +1,10 @@
 # Screened total20K and epoch7 Dense SFT continuation
 
+The later explicit user request now selects the **last** SFT checkpoint
+for automatic DiMO on this same mixed20K for five epochs. The earlier
+DEV recommendation below remains diagnostic and does not gate that handoff.
+See [automatic final-SFT DiMO](MIXED_LAST_SFT_DIMO.md) for the active policy.
+
 This is an independent exploratory dataset and run on the existing
 `exp/e3-dense-fp32-v1` maintenance branch. It does not change Frozen D200K,
 the old MagicBrush manifest, the paused DiMO checkpoints, the formal

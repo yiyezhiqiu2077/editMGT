@@ -127,6 +127,18 @@ def load_dense_teacher_contract(root, *, expected_base_identity=None):
             metadata=json.loads((root/'metadata.json').read_text())
             if metadata['global_optimizer_step']!=record['selected_step']:
                 raise RuntimeError('MAGICBRUSH_USER_SELECTED_EXPORTED_STEP_MISMATCH')
+    elif manifest.get('status') == 'mixed20k_user_last':
+        from .mixed_experiment import MODE, verify_teacher_record
+        if manifest.get('formal_teacher') is not False or manifest.get('selection_scope') != MODE:
+            raise RuntimeError('MIXED_DIMO_USER_TEACHER_CANNOT_BE_FORMAL')
+        if sha256_file(root / 'selection_record.json') != manifest.get('selection_record_sha256'):
+            raise RuntimeError('MIXED_DIMO_TEACHER_RECORD_CHANGED')
+        record = json.loads((root / 'selection_record.json').read_text())
+        verify_teacher_record(record, identity['checkpoint_sha256'])
+        metadata = json.loads((root / 'metadata.json').read_text())
+        if (metadata['global_optimizer_step'] != record['selected_step']
+                or metadata['committed_global_sample_count'] != 5 * record['data_identity']['train_rows']):
+            raise RuntimeError('MIXED_DIMO_EXPORTED_SFT_EPOCH_MISMATCH')
     else:
         raise RuntimeError("DENSE_TEACHER_STATUS_INVALID")
     ledger = json.loads((root / "COMPLETED.json").read_text())["files"]
