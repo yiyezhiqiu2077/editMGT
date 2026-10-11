@@ -1,0 +1,10 @@
+extends: dense_mixed30k_4a800_5epoch.yaml
+experiment: Dense-SFT-Mixed20K-Total-Epoch7-Continuation-4A800
+experiment_mode: mixed20k_epoch7_continuation
+max_optimizer_steps: 6250
+scheduler_horizon_steps: 6250
+checkpoint_steps: [1250, 2500, 3750, 5000, 6250]
+data:
+  name: fixed_mixed20k_total
+  expected_rows: 20000
+  manifest: ${MIXED_EXPERIMENT_ROOT}/data/train_20000.jsonl

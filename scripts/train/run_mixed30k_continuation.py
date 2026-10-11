@@ -22,7 +22,7 @@ from src.explicit_region.contracts import sha256_file
 from src.explicit_region.dense_checkpoint import verify_dense_checkpoint, write_json
 from src.explicit_region.dense_evaluation import assert_matching_predictions, comparison_visual, paired_comparison
 from src.explicit_region.formal_pipeline import write_json_atomic
-from src.explicit_region.mixed_experiment import verify_mixed_ready
+from src.explicit_region.mixed_experiment import COUNTS, MODE, ROWS, verify_mixed_ready
 
 
 def choose(candidates):
@@ -68,9 +68,12 @@ class MixedRun(Run):
             raise RuntimeError("MIXED_CURRENT_CPU_ACCEPTANCE_REQUIRED")
         if (self.root / "PIPELINE_STARTED.json").exists():
             raise RuntimeError("MIXED_PIPELINE_ALREADY_STARTED")
-        write_json(self.root / "PIPELINE_STARTED.json", {"git_sha": self.sha, "scope": "mixed30k_epoch7_continuation",
+        write_json(self.root / "PIPELINE_STARTED.json", {"git_sha": self.sha, "scope": MODE, "total_rows": ROWS,
                    "epoch7_checkpoint": str(self.a.previous_experiment / "sft/train/checkpoint-3843"),
                    "additional_epochs": 5, "release_upload": False, "old_dimo_restart": False})
+        self.phase = "parallel_download_screen_translate"; self.state("RUNNING")
+        self.command([sys.executable, ROOT / "scripts/data/incremental_mixed_preparation.py",
+                      "--experiment-root", self.root], "incremental_preparation")
         self.wait_downloads(); self.assert_code()
         self.phase = "screen_translate_freeze"; self.state("RUNNING")
         self.command([sys.executable, ROOT / "scripts/data/prepare_mixed30k_corpus.py", "--experiment-root",
@@ -88,7 +91,7 @@ class MixedRun(Run):
         baseline = verify_dense_checkpoint(sft["initial_dense_checkpoint"])
         old = Path("/data01/zhangyuyang/editmgt_eval_20261010")
         old_plan = json.loads((self.a.previous_experiment / "evaluation_plan.json").read_text())
-        plan = dict(old_plan, schema="mixed30k-sft-evaluation-v1", selection_scope="mixed30k_epoch7_continuation",
+        plan = dict(old_plan, schema="mixed20k-sft-evaluation-v1", selection_scope=MODE,
                     baseline_checkpoint=sft["initial_dense_checkpoint"], teacher_checkpoint=str(self.root / "selected_teacher"),
                     train_manifest=sft["data"]["manifest"], dev_manifest=str(self.root / "data/dev_full527.jsonl"),
                     dev32_manifest=str(self.root / "data/dev32.jsonl"), candidate_steps=sft["checkpoint_steps"],
@@ -101,7 +104,7 @@ class MixedRun(Run):
                  "statistical_scope": "exploratory; five candidates; individual 95% CIs"}
         plan["selection_rules"] = rules
         write_json(self.root / "evaluation_plan.json", plan)
-        prereg = {"schema": "mixed30k-selection-prereg-v1", "git_sha": self.sha, "rules": rules,
+        prereg = {"schema": "mixed20k-selection-prereg-v1", "git_sha": self.sha, "rules": rules,
                   "baseline_checkpoint_sha256": baseline["checkpoint_sha256"], "plan_sha256": recipe_fingerprint(plan),
                   "train_manifest_sha256": ready["train_manifest_sha256"],
                   "dev_manifest_sha256": sha256_file(plan["dev_manifest"])}
@@ -144,15 +147,15 @@ class MixedRun(Run):
             write_json(output / "paired_to_epoch7.json", pairs)
             comparison_visual({"Epoch7": paths[0], "Continued SFT": paths[1]}, output / "comparison.jpg", count=8)
         best = choose(candidates)
-        result = {"schema": "mixed30k-sft-quality-result-v1", "git_sha": self.sha, "candidates": candidates,
+        result = {"schema": "mixed20k-sft-quality-result-v1", "git_sha": self.sha, "candidates": candidates,
                   "selection_preregistration": prereg, "selected": best, "formal_teacher": False,
                   "test_read": False, "instruction_success": "NOT_CONFIRMED_BY_LPIPS_ALONE"}
         write_json(self.root / "SFT_QUALITY_RESULT.json", result)
-        report = ["# Mixed30K + MagicBrush epoch7 continuation", "", f"Code: {self.sha}",
-                  "Train: CrispEdit 6000 + ScaleEdit 18000 + InterEdit 6000 + original MagicBrush 8784.",
+        report = ["# Total20K including MagicBrush: epoch7 continuation", "", f"Code: {self.sha}",
+                  f"Train: {ROWS} total; dataset counts: {COUNTS}.",
                   "Five additional epochs; new optimizer; LR 2e-6; FP32 parameters/gradients/moments, BF16 forward.",
                   "DEV: unchanged 527 samples / 266 groups, seeds [0,1], 12 steps / CFG5.",
-                  "InterEdit: fixed early four asset shards; guidance masks; not a global representative sample.",
+                  "InterEdit: fixed early one asset shard; guidance masks; not a global representative sample.",
                   "Translations: pinned NLLB, automatic QA/backfill; human semantic review pending; TEST unused.", "",
                   "| Added epoch | Inside LPIPS | Paired delta | 95% group CI | Outside delta |",
                   "|---|---:|---:|---|---:|"]

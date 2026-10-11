@@ -48,8 +48,12 @@ def mapped_columns(mapping):
     return sorted(columns)
 
 
-def iter_rows(root,mapping):
+def iter_rows(root,mapping,selected_files=None):
     files=sorted(root.glob(mapping["files_glob"]));fmt=mapping["format"]
+    if selected_files is not None:
+        allowed={file.relative_to(root).as_posix() for file in files}
+        if not set(selected_files)<=allowed:raise RuntimeError("selected file is missing or outside schema glob")
+        files=[root/file for file in sorted(set(selected_files))]
     if not files: raise RuntimeError("schema mapping glob matched no files")
     for file in files:
         relative=file.relative_to(root).as_posix()
@@ -78,12 +82,13 @@ def embedded_bytes(raw, mapping, role):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--root",required=True);parser.add_argument("--mapping",required=True);parser.add_argument("--edit-type-mapping",required=True);parser.add_argument("--output",required=True)
+    parser.add_argument("--file",action="append",dest="selected_files")
     args=parser.parse_args();root=Path(args.root).resolve();mapping=load_schema_contract(args.mapping);types=yaml.safe_load(Path(args.edit_type_mapping).read_text())["datasets"]
     name=mapping["dataset_name"];revision=mapping["dataset_revision"]
     if name not in ("crispedit","scaleedit","interedit"):raise ValueError("schema-mapped builder is for audited non-MagicBrush pools")
     if not types.get(name):raise RuntimeError(f"formal edit-type mapping for {name} is empty")
     records=[];rejections=[];rejection_counts=Counter()
-    for file_relative,index,raw in iter_rows(root,mapping):
+    for file_relative,index,raw in iter_rows(root,mapping,args.selected_files):
         if any(raw.get(column) != expected for column,expected in mapping.get("eligibility",{}).items()):
             continue
         instruction=str(raw[mapping["fields"]["instruction"]]).strip()

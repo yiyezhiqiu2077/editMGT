@@ -1,12 +1,12 @@
-"""Independent 30K-plus-MagicBrush SFT admission; formal D200K is unchanged."""
+"""Independent total-20K SFT admission; formal D200K is unchanged."""
 from collections import Counter
 import json
 from pathlib import Path
 
 from .contracts import sha256_file
 
-MODE = "mixed30k_epoch7_continuation"
-COUNTS = {"magicbrush": 8784, "crispedit": 6000, "scaleedit": 18000, "interedit": 6000}
+MODE = "mixed20k_epoch7_continuation"
+COUNTS = {"magicbrush": 8784, "crispedit": 2000, "scaleedit": 7000, "interedit": 2216}
 ROWS = sum(COUNTS.values())
 
 
@@ -20,7 +20,7 @@ def validate_mixed_budget(config):
     if (config.get("world_size"), config["epochs"], config["batch_per_gpu"],
             config["gradient_accumulation"], config["data"]["name"],
             config["data"]["expected_rows"], config["max_optimizer_steps"],
-            config["scheduler_horizon_steps"]) != (4, 5, 1, 4, "fixed_mixed30k_plus_magicbrush",
+            config["scheduler_horizon_steps"]) != (4, 5, 1, 4, "fixed_mixed20k_total",
                                                     ROWS, 5 * ROWS // 16, 5 * ROWS // 16):
         raise RuntimeError("MIXED_REGISTERED_SFT_BUDGET_CHANGED")
     if config["checkpoint_steps"] != [epoch * (ROWS // 16) for epoch in range(1, 6)]:
@@ -36,7 +36,7 @@ def verify_mixed_ready(config):
     validate_mixed_budget(config)
     data = config["data"]
     record = json.loads(Path(data["corpus_ready"]).read_text())
-    expected = {"schema": "mixed30k-training-ready-v1", "status": "VERIFIED",
+    expected = {"schema": "mixed-training-ready-v2", "status": "VERIFIED",
                 "selection_scope": MODE, "total_rows": ROWS, "dataset_counts": COUNTS,
                 "train_dev_leakage": "PASS", "loader_geometry": "PASS",
                 "translation_qa": "PASS", "magicbrush_preserved": True, "padding": False}

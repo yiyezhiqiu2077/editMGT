@@ -14,13 +14,15 @@ from tests.fixed200k_helpers import fixture_record, synthetic_record
 
 
 def config():
-    return _load_unexpanded(Path("configs/train/dense_mixed30k_4a800_5epoch.yaml"))
+    return _load_unexpanded(Path("configs/train/dense_mixed20k_4a800_5epoch.yaml"))
 
 
 def test_registered_mixed_recipe_is_independent_of_formal_and_magicbrush():
     c = config();validate_dense_config(c)
     assert c["initial_dense_checkpoint"].endswith("checkpoint-3843")
-    assert c["max_optimizer_steps"] == 12120
+    assert c["data"]["expected_rows"] == 20000
+    assert c["max_optimizer_steps"] == 6250
+    assert c["checkpoint_steps"] == [1250, 2500, 3750, 5000, 6250]
     with pytest.raises(RuntimeError):
         validate_dense_config(c, formal=True)
     formal = _load_unexpanded(Path("configs/train/dense_d200k_5epoch.yaml"))

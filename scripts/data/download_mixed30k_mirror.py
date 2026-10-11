@@ -30,8 +30,9 @@ def shard_order(name, revision, path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment-root", type=Path, required=True)
-    parser.add_argument("--config", default="configs/data/mixed30k_plus_magicbrush.yaml")
+    parser.add_argument("--config", default="configs/data/mixed20k_total.yaml")
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
     root = args.experiment_root.resolve()
     (root / "metadata").mkdir(parents=True, exist_ok=True)
@@ -105,6 +106,10 @@ def main():
     print(json.dumps({"status": "DOWNLOAD_PLANNED", "bytes": plan["total_download_bytes"],
                       "files": len(jobs), "pools": {name: value.get("candidate_rows_before_qc")
                       for name, value in plan["datasets"].items()}}), flush=True)
+    if args.plan_only:
+        return
+    priority=config["mirror"].get("download_priority",list(REPOS))
+    jobs.sort(key=lambda job:priority.index(job[0]))
 
     def download(job):
         name, repo, revision, entry, target = job

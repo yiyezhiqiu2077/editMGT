@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze screened/translated 30K additions plus the existing MagicBrush train."""
+"""Freeze the screened total-20K corpus, including original MagicBrush train."""
 import argparse
 from collections import Counter
 import json
@@ -20,6 +20,7 @@ from src.explicit_region.formal_pipeline import write_json_atomic
 from src.explicit_region.interedit import TarMemberReader
 from src.explicit_region.language import contains_han
 from src.explicit_region.mixed_experiment import COUNTS, MODE, ROWS
+from scripts.data.incremental_mixed_preparation import merge_cached_pools
 
 
 def read(path):
@@ -128,18 +129,11 @@ def main():
             raise RuntimeError(f"{label} failed with code {result.returncode}")
         return result.returncode
 
-    for name in ("crispedit", "scaleedit"):
-        command(["scripts/data/build_schema_mapped_canonical.py", "--root", root / "datasets" / name,
-                 "--mapping", f"configs/data/schema/{name}.yaml", "--edit-type-mapping",
-                 "configs/data/edit_type_mapping.yaml", "--output", pools / f"{name}.raw.jsonl"], f"canonical_{name}")
-    metadata = sorted((root / "datasets/interedit/metadata").glob("*.jsonl.gz"))
-    # Only the preregistered subset; metadata from superseded download plans is excluded.
     plan = json.loads((root / "DOWNLOAD_PLAN.json").read_text())
-    names = {entry["rfilename"] for entry in plan["datasets"]["interedit"]["files"]}
-    metadata = [path for path in metadata if path.relative_to(root / "datasets/interedit").as_posix() in names]
-    command(["scripts/data/build_interedit_canonical_pool.py", *metadata, "--interedit-root",
-             root / "datasets/interedit", "--revision", plan["datasets"]["interedit"]["revision"],
-             "--output", pools / "interedit.raw.jsonl"], "canonical_interedit")
+    incremental = json.loads((data / "INCREMENTAL_COMPLETE.json").read_text())
+    if incremental.get("status") != "COMPLETE" or incremental["download_plan_sha256"] != sha256_file(root / "DOWNLOAD_PLAN.json"):
+        raise RuntimeError("registered incremental preparation not complete")
+    merge_cached_pools(root, plan)
     magic = read(previous / "data/train_8800.jsonl")
     if len(magic) != COUNTS["magicbrush"]:
         raise RuntimeError("original MagicBrush train budget changed")
@@ -162,7 +156,7 @@ def main():
     for filename in ("dev_full527.jsonl", "dev128.jsonl", "dev32.jsonl"):
         (data / filename).write_bytes((previous / "data" / filename).read_bytes())
     cache = data / "translation_cache.jsonl"; cache.touch(exist_ok=True)
-    config_path = ROOT / "configs/data/mixed30k_plus_magicbrush.yaml"
+    config_path = ROOT / "configs/data/mixed20k_total.yaml"
     config = load_config(config_path); revision = config["translation"]["immutable_revision"]
 
     def translate(required, label):
@@ -244,11 +238,13 @@ def main():
     for name in COUNTS:
         audit_argv.extend([f"--{name}-root", roots[name]])
     command(audit_argv, "data_vq_audit")
-    files = [manifest, config_path, cache, data / "POOL_SCREENING.json", data / "audit/audit_report.json",
+    files = [manifest, config_path, ROOT / "configs/data/mixed30k_plus_magicbrush.yaml", cache,
+             data / "INCREMENTAL_COMPLETE.json", pools / "INCREMENTAL_POOL_EVIDENCE.json",
+             root / "DOWNLOAD_PLAN.json", data / "POOL_SCREENING.json", data / "audit/audit_report.json",
              previous / "data/MAGICBRUSH_READY.json", data / "translation_review500.jsonl",
              *sorted(validation.glob("*_aux128.jsonl")), *(data / file for file in ("dev_full527.jsonl", "dev128.jsonl", "dev32.jsonl"))]
     checkpoint = previous / "sft/train/checkpoint-3843"
-    ready = {"schema": "mixed30k-training-ready-v1", "status": "VERIFIED", "selection_scope": MODE,
+    ready = {"schema": "mixed-training-ready-v2", "status": "VERIFIED", "selection_scope": MODE,
              "total_rows": ROWS, "dataset_counts": COUNTS, "train_manifest_sha256": sha256_file(manifest),
              "train_dev_leakage": "PASS", "test_isolation": "NOT_TESTED", "test_read": False,
              "loader_geometry": "PASS", "translation_qa": "PASS", "manual_translation_review": "PENDING",
@@ -259,7 +255,7 @@ def main():
     env.update(MIXED_EXPERIMENT_ROOT=str(root), PREVIOUS_EXPERIMENT_ROOT=str(previous), EDITMGT_MODEL_ROOT=model_root)
     os.environ.update({key: env[key] for key in ("MIXED_EXPERIMENT_ROOT", "PREVIOUS_EXPERIMENT_ROOT", "EDITMGT_MODEL_ROOT")})
     import yaml
-    training = load_config(ROOT / "configs/train/dense_mixed30k_4a800_5epoch.yaml")
+    training = load_config(ROOT / "configs/train/dense_mixed20k_4a800_5epoch.yaml")
     (root / "configs").mkdir(exist_ok=True)
     (root / "configs/sft.yaml").write_text(yaml.safe_dump(training, sort_keys=False))
     print(json.dumps(ready), flush=True)
