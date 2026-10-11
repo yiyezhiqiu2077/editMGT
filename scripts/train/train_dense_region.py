@@ -134,7 +134,7 @@ def main():
         raise RuntimeError(f"REAL_DENSE_E3_REQUIRES_EXCLUSIVE_{required_world}_GPU_ALLOCATION")
     if required_world == 4:
         from src.dimo.runtime import gpu_admission
-        gpu_admission(magicbrush=True)
+        gpu_admission(magicbrush=True, allow_other_jobs=os.environ.get('EDITMGT_ALLOW_SHARED_A800') == '1')
     output = Path(args.output_dir or config["output_dir"])
     if not args.resume and output.exists() and any(output.iterdir()):
         raise RuntimeError("DENSE_FRESH_OUTPUT_NOT_EMPTY")

@@ -109,7 +109,7 @@ class Run:
                 except ProcessLookupError:pass
     def train(self,stage,output,stop=None,resume=None):
         self.phase=f'{stage}:{output.name}:step{stop or "full"}';self.state('RUNNING')
-        gpu_admission(magicbrush=True)
+        gpu_admission(magicbrush=True, allow_other_jobs=self.env.get('EDITMGT_ALLOW_SHARED_A800') == '1')
         entry='train_dense_region.py' if stage=='sft' else 'train_full_dense_dimo.py'
         argv=[sys.executable,'-m','torch.distributed.run','--standalone','--nproc-per-node=4',
               str(ROOT/'scripts/train'/entry),'--config',str(self.root/'configs'/f'{stage}.yaml'),

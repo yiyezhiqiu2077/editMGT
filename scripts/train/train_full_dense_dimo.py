@@ -85,7 +85,8 @@ def main():
     commit = StepCommit()
     try:
         if not args.synthetic:
-            admission = gpu_admission(magicbrush=exploratory)
+            admission = gpu_admission(magicbrush=exploratory,
+                allow_other_jobs=exploratory and os.environ.get('EDITMGT_ALLOW_SHARED_A800') == '1')
             write_json(output / f"gpu_admission_rank{rank}.json", admission)
         if args.synthetic:
             from src.dimo.synthetic import SyntheticDenseTransformer, SyntheticDataset, synthetic_batch

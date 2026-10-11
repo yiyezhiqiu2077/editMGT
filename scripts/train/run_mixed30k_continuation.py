@@ -23,6 +23,7 @@ from src.explicit_region.dense_checkpoint import verify_dense_checkpoint, write_
 from src.explicit_region.dense_evaluation import assert_matching_predictions, comparison_visual, paired_comparison
 from src.explicit_region.formal_pipeline import write_json_atomic
 from src.explicit_region.mixed_experiment import COUNTS, MODE, ROWS, verify_mixed_ready
+from src.dimo.runtime import gpu_admission
 
 
 def choose(candidates):
@@ -50,7 +51,7 @@ def recover_pretraining(root):
     marker.replace(archive / marker.name)
     write_json_atomic(archive / "RECOVERY.json", {"explicit_pretraining_recovery": True,
         "previous_failure": state, "total_rows": ROWS, "dataset_counts": COUNTS,
-        "reason": "user continuation; replace insufficient InterEdit quota with already screened reserves",
+        "reason": "authorized continuation after repairing failed pretraining tooling; current quotas recorded above",
         "training_checkpoints_present": False, "old_dimo_restart": False})
 
 
@@ -61,6 +62,22 @@ class MixedRun(Run):
             if key.lower().endswith("_proxy"):
                 self.env.pop(key)
         self.env.update(HF_ENDPOINT="https://hf-mirror.com", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+        if getattr(args, 'allow_shared_gpus', False): self.env['EDITMGT_ALLOW_SHARED_A800'] = '1'
+
+    def train(self, stage, output, stop=None, resume=None):
+        self.phase = "waiting_for_idle_four_gpus"
+        while True:
+            self.assert_code()
+            try:
+                gpu_admission(magicbrush=True,
+                    allow_other_jobs=getattr(getattr(self, 'a', None), 'allow_shared_gpus', False))
+                break
+            except RuntimeError as exc:
+                if "GPU_HAS_OTHER_JOB" not in str(exc): raise
+                self.state("WAITING_FOR_IDLE_GPUS", reason=str(exc), next_stage=stage,
+                           next_output=str(output), next_stop=stop)
+                time.sleep(30)
+        super().train(stage, output, stop, resume)
 
     def assert_code(self):
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -199,6 +216,8 @@ def main():
     parser.add_argument("--experiment-root", type=Path, required=True)
     parser.add_argument("--previous-experiment", type=Path, required=True)
     parser.add_argument("--recover-pretraining", action="store_true")
+    parser.add_argument("--allow-shared-gpus", action="store_true",
+                        help="explicit user authorization to coexist with current GPU jobs")
     args = parser.parse_args();args.upload_curves = False;args.monitor_token_file = None
     args.experiment_root = args.experiment_root.resolve();args.previous_experiment = args.previous_experiment.resolve()
     lock = (args.experiment_root / ".coordinator.lock").open("a")

@@ -33,7 +33,7 @@ def tensor_image(t):return Image.fromarray((t.numpy().transpose(1,2,0)*255).roun
 def montage(items,path):
  tile=192;label=54;canvas=Image.new("RGB",(4*tile,len(items)*(tile+label)),"white");draw=ImageDraw.Draw(canvas)
  for r,item in enumerate(items):
-  y=r*(tile+label);mask=Image.fromarray(item["edit_region_mask"].numpy().astype(np.uint8)*255).convert("RGB")
+  y=r*(tile+label);mask=Image.fromarray(item["edit_region_mask"].numpy().astype(np.uint8)*255).convert("L")
   source=tensor_image(item["source_image"]);overlay=source.copy();overlay.paste(Image.new("RGB",source.size,(255,0,0)),mask=mask.point(lambda x:x//3));target=tensor_image(item["target_image"])
   for c,image in enumerate((source,mask,overlay,target)):canvas.paste(image.resize((tile,tile)),(c*tile,y))
   draw.text((4,y+tile+2),f"{item['dataset_name']} {item['sample_uid'][:12]} {item['edit_type']} {item['mask_semantics']}\n{item['instruction_en'][:150]}",fill="black")

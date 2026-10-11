@@ -63,6 +63,7 @@ class AutoRun(Run):
                         HF_ENDPOINT='https://hf-mirror.com', HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
         for key in list(self.env):
             if key.lower().endswith('_proxy'): self.env.pop(key)
+        if getattr(args, 'allow_shared_gpus', False): self.env['EDITMGT_ALLOW_SHARED_A800'] = '1'
         os.environ.update({key: self.env[key] for key in ('MIXED_EXPERIMENT_ROOT', 'PREVIOUS_EXPERIMENT_ROOT', 'EDITMGT_MODEL_ROOT')})
 
     def state(self, status, **values):
@@ -110,7 +111,7 @@ class AutoRun(Run):
                 self.state('WAITING_FOR_SFT_COORDINATOR_EXIT'); time.sleep(10)
         while True:
             try:
-                gpu_admission(magicbrush=True)
+                gpu_admission(magicbrush=True, allow_other_jobs=self.a.allow_shared_gpus)
                 break
             except RuntimeError as exc:
                 if 'GPU_HAS_OTHER_JOB' not in str(exc): raise
@@ -126,7 +127,8 @@ class AutoRun(Run):
         if marker.exists(): raise RuntimeError('MIXED_DIMO_HANDOFF_ALREADY_STARTED_NO_IMPLICIT_RETRY')
         config = load_config(ROOT / 'configs/dimo/full_dense_mixed20k_4a800_5epoch.yaml')
         request = verify_request(config)
-        budget = whole_handoff_budget(self.root, self.a.secondary_root, 1009307648)
+        budget = whole_handoff_budget(self.root, self.a.secondary_root, 1009307648,
+                                      evaluation_root=self.a.evaluation_root)
         write_json(self.root / 'admission/DIMO_AUTO_WHOLE_DISK_BUDGET.json', budget)
         if budget['status'] != 'PASS': raise RuntimeError('MIXED_DIMO_WHOLE_HANDOFF_STORAGE_INSUFFICIENT')
         write_json(marker, {'git_sha': self.sha, 'authorization_sha256': self.request_sha,
@@ -156,8 +158,14 @@ class AutoRun(Run):
         secondary.mkdir(parents=True, exist_ok=True)
         inference = secondary / 'training_inference'; inference.mkdir()
         train.mkdir(parents=True); (train / 'inference').symlink_to(inference, target_is_directory=True)
+        evaluation = self.a.evaluation_root
+        if evaluation is not None:
+            if evaluation.exists(): raise RuntimeError(f'MIXED_DIMO_EVALUATION_OUTPUT_ALREADY_EXISTS: {evaluation}')
+            evaluation.mkdir(parents=True)
+            (train / 'evaluation').symlink_to(evaluation, target_is_directory=True)
         write_json(self.root / 'DIMO_STORAGE_LOCATIONS.json', {'smoke2': str(smoke), 'fresh20': str(fresh),
-                   'resume20': str(resumed), 'train': str(train), 'inference': str(inference), 'retention': 'all checkpoints'})
+                   'resume20': str(resumed), 'train': str(train), 'inference': str(inference),
+                   'evaluation': str(evaluation or train / 'evaluation'), 'retention': 'all checkpoints'})
         self.assert_code_request()
         self.train('dimo', smoke, 2); self.train('dimo', fresh, 20); self.train('dimo', resumed, 10)
         self.train('dimo', resumed, 20, resumed / 'checkpoints/checkpoint-10')
@@ -182,9 +190,12 @@ def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--experiment-root', type=Path, required=True)
     parser.add_argument('--previous-experiment', type=Path, required=True)
     parser.add_argument('--secondary-root', type=Path, required=True)
+    parser.add_argument('--evaluation-root', type=Path, help='optional separate filesystem for final DEV images')
+    parser.add_argument('--allow-shared-gpus', action='store_true', help='explicit user-authorized GPU coexistence')
     args = parser.parse_args(); args.upload_curves = False; args.monitor_token_file = None
     args.experiment_root = args.experiment_root.resolve(); args.previous_experiment = args.previous_experiment.resolve()
     args.secondary_root = args.secondary_root.resolve()
+    if args.evaluation_root is not None: args.evaluation_root = args.evaluation_root.resolve()
     lock = (args.experiment_root / '.dimo_handoff.lock').open('a'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     run = AutoRun(args)
     for number in (signal.SIGINT, signal.SIGTERM):

@@ -32,6 +32,22 @@ def write(path, rows):
     path.write_text("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows))
 
 
+def verify_loader_rows(dataset, workers=8):
+    """Run the identical loader for every index; materialized file readers are thread safe."""
+    from concurrent.futures import ThreadPoolExecutor
+    if workers < 1: raise ValueError('loader workers must be positive')
+    if workers > 1 and any(backend.tar_reader is not None for backend, _ in dataset.backends.values()):
+        raise RuntimeError('PARALLEL_LOADER_AUDIT_REQUIRES_MATERIALIZED_FILE_READERS')
+    def check(index):
+        item = dataset[index]
+        if item['sample_uid'] != dataset.rows[index]['sample_uid']:
+            raise RuntimeError('LOADER_AUDIT_SAMPLE_ORDER_CHANGED')
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for index, _ in enumerate(pool.map(check, range(len(dataset))), 1):
+            if index % 500 == 0:
+                print(json.dumps({'loader_verified': index, 'total': len(dataset)}), flush=True)
+
+
 def exclude_connected_groups(rows, protected):
     """Remove full groups connected to protected source OR target content."""
     groups, blocked_images = {}, set()
@@ -224,10 +240,7 @@ def main():
     import torch
     torch.set_num_threads(2)
     dataset = FixedCorpusDataset(manifest, roots, resolution=1024, base_seed=42, verify_hashes=True)
-    for index in range(len(dataset)):
-        dataset[index]
-        if (index + 1) % 500 == 0:
-            print(json.dumps({"loader_verified": index + 1, "total": len(dataset)}), flush=True)
+    verify_loader_rows(dataset)
     command(["scripts/data/build_translation_manual_audit.py", "--manifest", manifest,
              "--output-jsonl", data / "translation_review500.jsonl", "--output-csv",
              data / "translation_review500.csv"], "translation_review")

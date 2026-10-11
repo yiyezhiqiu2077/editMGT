@@ -57,11 +57,26 @@ main raw/EMA exports use the secondary filesystem. The main inference
 directory is an explicit symlink. Per-invocation disk admission budgets
 only the states that invocation can write, with an atomic-save reserve.
 
-The current SFT controller pins commit07f3fcdd and its clean worktree.
-The new coordinator is committed in a detached worktree, then pushed to the
-existing `exp/e3-dense-fp32-v1` remote branch. No new branch is created and
-the running SFT worktree stays pinned. Its immutable CPU acceptance must
-match the new coordinator commit before the standby starts.
+An optional `--evaluation-root` places final DEV images on a third filesystem,
+reserving 32 GiB there and keeping 8 GiB for primary logs. Checkpoint and
+atomic-save reservations remain unchanged. The current recovery uses this
+option because concurrent inference output reduced free primary space.
+
+The initial SFT preparation controller pinned commit07f3fcdd and its clean
+worktree. The new coordinator was committed separately and pushed to the
+existing `exp/e3-dense-fp32-v1` branch. After preparation stopped at an RGB
+alpha-mask montage error, the repair is committed and the stopped maintenance
+checkout can advance to that same code. No new branch is created. Successful
+CPU acceptance must match each restarted controller's immutable commit.
+
+The latest user explicitly authorizes coexistence with the current DiMO/
+SoftDiMO inference jobs. `--allow-shared-gpus` records that authorization
+and permits the four-A800 exploratory controllers and workers to share
+their GPUs. Other processes are retained; hardware and precision gates stay
+active, and OOM still stops without automatic recipe changes. Without the
+flag, the occupancy gate waits. Formal D200K sharing remains forbidden.
+Loader revalidation runs the same fixed-index/hash/geometry reader using
+eight threads over materialized file assets, with every error propagated.
 
 ## Launch and evidence
 
@@ -76,6 +91,9 @@ python -u scripts/train/auto_mixed_last_sft_dimo.py \
   --previous-experiment "$PREVIOUS_EXPERIMENT_ROOT" \
   --secondary-root "$MIXED_DIMO_SECONDARY_ROOT"
 ```
+
+For the authorized coexistence/recovery launch, add `--allow-shared-gpus`
+to both controllers and `--evaluation-root` to the DiMO standby.
 
 `DIMO_HANDOFF_STATUS.json` records waiting and ownership separately from
 the active SFT `STATUS.json`. After ownership, both record the new run.

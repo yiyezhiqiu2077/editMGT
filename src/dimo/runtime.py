@@ -65,12 +65,14 @@ def validate_output(config, *, synthetic=False):
     return output
 
 
-def gpu_admission(*, magicbrush=False):
+def gpu_admission(*, magicbrush=False, allow_other_jobs=False):
     import csv
     import os
     import subprocess
     import psutil
     required = 4 if magicbrush else 8
+    if allow_other_jobs and not magicbrush:
+        raise RuntimeError('FULL_DIMO_FORMAL_GPU_SHARING_NOT_AUTHORIZED')
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", ','.join(map(str,range(required)))).split(",")
     if len(visible) != required or len(set(visible)) != required:
         raise RuntimeError("FULL_DIMO_REQUIRES_EIGHT_DISTINCT_VISIBLE_GPUS")
@@ -83,6 +85,7 @@ def gpu_admission(*, magicbrush=False):
     if magicbrush and any('A800' not in r[2] or int(r[3]) < 80000 for r in selected):
         raise RuntimeError('MAGICBRUSH_REQUIRES_FOUR_A800_80GB_GPUS')
     apps = subprocess.check_output(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True)
+    shared = []
     for row in csv.reader(apps.splitlines()):
         if len(row) != 2 or row[0].strip() not in {r[1] for r in selected}:
             continue
@@ -92,8 +95,11 @@ def gpu_admission(*, magicbrush=False):
         except psutil.NoSuchProcess:
             continue
         if not owned:
-            raise RuntimeError("FULL_DIMO_GPU_HAS_OTHER_JOB_DO_NOT_PREEMPT")
-    return {"status": "READY_FOR_MEASURED_DDP_STEP", "gpus": selected, "smoke": "NOT_RUN"}
+            if not allow_other_jobs:
+                raise RuntimeError("FULL_DIMO_GPU_HAS_OTHER_JOB_DO_NOT_PREEMPT")
+            shared.append({'gpu_uuid': row[0].strip(), 'pid': pid})
+    return {"status": "READY_FOR_MEASURED_DDP_STEP", "gpus": selected, "smoke": "NOT_RUN",
+            "gpu_sharing_user_authorized": allow_other_jobs, "existing_other_jobs": shared}
 
 
 class MemoryRecorder:

@@ -35,7 +35,7 @@ def segment_budget(parameters, config, output, stop):
             'volumes': dict(volumes), 'retention': 'retain all checkpoints; no automatic deletion'}
 
 
-def whole_handoff_budget(root, secondary, parameters):
+def whole_handoff_budget(root, secondary, parameters, *, evaluation_root=None):
     """Include unfinished SFT saves and all new DiMO acceptance/training states."""
     root, secondary = Path(root), Path(secondary)
     primary_parent = existing_parent(root); secondary_parent = existing_parent(secondary)
@@ -46,12 +46,18 @@ def whole_handoff_budget(root, secondary, parameters):
     remaining_sft = sum(not (root / 'sft' / name / f'checkpoint-{step}/COMPLETED.json').exists()
                         for name, step in sft_outputs)
     # Primary: SFT, Teacher, smoke2 + initial inference, three resumes, atomic save.
-    primary = int((remaining_sft * 12 + 4 + 36 + 3 * 28 + 28) * parameters * 1.05) + 32 * 1024**3
+    primary = int((remaining_sft * 12 + 4 + 36 + 3 * 28 + 28) * parameters * 1.05) + (8 if evaluation_root else 32) * 1024**3
     # Secondary peak: fresh/resume acceptance retained plus four final raw/EMA exports.
     # Their atomic acceptance save occurs before the final inference exports.
     secondary_bytes = int(max(3 * 28 + 2 * 8 + 4 * 8, 4 * 28 + 2 * 8) * parameters * 1.05) + 8 * 1024**3
     records = [{'path': str(primary_parent), 'required_bytes': primary},
                {'path': str(secondary_parent), 'required_bytes': secondary_bytes}]
+    if evaluation_root is not None:
+        evaluation_parent = existing_parent(evaluation_root)
+        if os.stat(evaluation_parent).st_dev in (os.stat(primary_parent).st_dev, os.stat(secondary_parent).st_dev):
+            raise RuntimeError('MIXED_DIMO_EVALUATION_STORAGE_REQUIRES_THIRD_FILESYSTEM')
+        records.append({'path': str(evaluation_parent), 'required_bytes': 32 * 1024**3,
+                        'purpose': 'post-training DEV predictions and case images'})
     for row in records:
         row['free_bytes'] = shutil.disk_usage(row['path']).free
         row['status'] = 'PASS' if row['free_bytes'] >= row['required_bytes'] else 'FAIL'
