@@ -106,3 +106,49 @@ def test_separate_dev_storage_reserves_images_without_reducing_checkpoint_budget
     assert separate['status'] == 'PASS'
     with pytest.raises(RuntimeError, match='THIRD_FILESYSTEM'):
         storage.whole_handoff_budget(*paths[:2], 1000, evaluation_root=paths[0])
+
+
+def skip_request(root):
+    import json
+    record = {'schema': 'mixed20k-user-skip-sft-gpu-acceptance-v1',
+              'user_instruction': 'Skip SFT smoke and resume comparison; start long training',
+              'skip_sft_gpu_acceptance': True, 'sft_epochs': 5, 'sft_steps': 6250, 'data_rows': 20000}
+    (root / 'USER_SKIP_SFT_GPU_ACCEPTANCE.json').write_text(json.dumps(record))
+    return record
+
+
+def test_direct_ready_recovery_requires_user_request_and_cannot_replay_long_training(tmp_path, monkeypatch):
+    import json, pytest
+    from scripts.train import run_mixed30k_continuation as coordinator
+    (tmp_path / 'data').mkdir(); (tmp_path / 'data/MIXED_READY.json').write_text('{}')
+    (tmp_path / 'configs').mkdir(); (tmp_path / 'configs/sft.yaml').write_text('fixture: true')
+    (tmp_path / 'PIPELINE_STARTED.json').write_text('{}')
+    (tmp_path / 'STATUS.json').write_text(json.dumps({'status': 'STOPPED_HARD_ERROR', 'phase': 'sft:smoke2:step2', 'pid': 999999999}))
+    monkeypatch.setattr(coordinator, 'verify_mixed_ready', lambda _: {'verified': True})
+    with pytest.raises(FileNotFoundError): coordinator.recover_ready_training(tmp_path)
+    skip_request(tmp_path)
+    train = tmp_path / 'sft/train'; train.mkdir(parents=True)
+    (train / 'train_metrics.jsonl').write_text('{"global_step":1}\n')
+    with pytest.raises(RuntimeError, match='CANNOT_REPLAY_EXISTING_LONG_TRAINING'):
+        coordinator.recover_ready_training(tmp_path)
+    assert (tmp_path / 'PIPELINE_STARTED.json').exists()
+    (train / 'train_metrics.jsonl').unlink()
+    smoke = tmp_path / 'sft/smoke2'; smoke.mkdir()
+    (smoke / 'partial.log').write_text('retained')
+    coordinator.recover_ready_training(tmp_path)
+    assert not (tmp_path / 'PIPELINE_STARTED.json').exists()
+    assert (smoke / 'partial.log').read_text() == 'retained'
+    receipt = next((tmp_path / 'recovery').glob('*/RECOVERY.json'))
+    assert json.loads(receipt.read_text())['long_training_replayed'] is False
+
+
+def test_skip_request_does_not_accept_missing_instruction_or_changed_budget(tmp_path):
+    import json, pytest
+    from scripts.train.run_mixed30k_continuation import verify_skip_sft_acceptance
+    record = skip_request(tmp_path)
+    assert len(verify_skip_sft_acceptance(tmp_path)) == 64
+    for key, value in [('user_instruction', ''), ('sft_steps', 25000), ('skip_sft_gpu_acceptance', False)]:
+        forged = dict(record); forged[key] = value
+        (tmp_path / 'USER_SKIP_SFT_GPU_ACCEPTANCE.json').write_text(json.dumps(forged))
+        with pytest.raises(RuntimeError, match='EXPLICIT_USER_REQUEST'):
+            verify_skip_sft_acceptance(tmp_path)

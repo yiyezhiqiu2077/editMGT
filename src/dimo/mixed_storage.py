@@ -41,8 +41,12 @@ def whole_handoff_budget(root, secondary, parameters, *, evaluation_root=None):
     primary_parent = existing_parent(root); secondary_parent = existing_parent(secondary)
     if os.stat(primary_parent).st_dev == os.stat(secondary_parent).st_dev:
         raise RuntimeError('MIXED_DIMO_STORAGE_PLAN_REQUIRES_TWO_FILESYSTEMS')
-    sft_outputs = [('smoke2', 2), ('fresh20', 20), ('resume20', 10), ('resume20', 20),
-                   *[('train', step) for step in (1250, 2500, 3750, 5000, 6250)]]
+    skip_record = root / 'USER_SKIP_SFT_GPU_ACCEPTANCE.json'
+    if skip_record.exists():
+        from scripts.train.run_mixed30k_continuation import verify_skip_sft_acceptance
+        verify_skip_sft_acceptance(root)
+    sft_outputs = ([('smoke2', 2), ('fresh20', 20), ('resume20', 10), ('resume20', 20)] if not skip_record.exists() else [])
+    sft_outputs += [('train', step) for step in (1250, 2500, 3750, 5000, 6250)]
     remaining_sft = sum(not (root / 'sft' / name / f'checkpoint-{step}/COMPLETED.json').exists()
                         for name, step in sft_outputs)
     # Primary: SFT, Teacher, smoke2 + initial inference, three resumes, atomic save.

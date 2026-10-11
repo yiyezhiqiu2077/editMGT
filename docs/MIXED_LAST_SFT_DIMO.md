@@ -78,6 +78,16 @@ flag, the occupancy gate waits. Formal D200K sharing remains forbidden.
 Loader revalidation runs the same fixed-index/hash/geometry reader using
 eight threads over materialized file assets, with every error propagated.
 
+The later user instruction explicitly skips **SFT** smoke/fresh20/10+resume20
+and starts the long SFT run directly from the already verified READY data.
+Use `--start-from-ready --skip-sft-gpu-acceptance` with the immutable explicit
+`USER_SKIP_SFT_GPU_ACCEPTANCE.json`. Interrupted smoke outputs remain intact.
+SFT CUDA/resume acceptance is labeled `SKIPPED_BY_EXPLICIT_USER_REQUEST` /
+`NOT_TESTED`; it is never reported as PASS. The direct-start recovery rejects
+any existing long-training output, so it cannot replay or overwrite training.
+Data/checkpoint identity checks and training math stay unchanged. This request
+only names SFT; the future DiMO acceptance plan is retained.
+
 ## Launch and evidence
 
 Create `USER_AUTO_LAST_SFT_DIMO.json` from the explicit user request and

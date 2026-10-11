@@ -55,6 +55,44 @@ def recover_pretraining(root):
         "training_checkpoints_present": False, "old_dimo_restart": False})
 
 
+def verify_skip_sft_acceptance(root):
+    path = root / 'USER_SKIP_SFT_GPU_ACCEPTANCE.json'
+    record = json.loads(path.read_text())
+    if (record.get('schema') != 'mixed20k-user-skip-sft-gpu-acceptance-v1'
+            or not record.get('user_instruction', '').strip()
+            or record.get('skip_sft_gpu_acceptance') is not True
+            or (record.get('sft_epochs'), record.get('sft_steps'), record.get('data_rows')) != (5, 6250, ROWS)):
+        raise RuntimeError('MIXED_SFT_ACCEPTANCE_SKIP_REQUIRES_EXPLICIT_USER_REQUEST')
+    return sha256_file(path)
+
+
+def recover_ready_training(root):
+    """Explicit switch from stopped smoke/acceptance to untouched long training."""
+    authorization = verify_skip_sft_acceptance(root)
+    if not (root / 'data/MIXED_READY.json').is_file():
+        raise RuntimeError('MIXED_READY_DIRECT_START_REQUIRES_VERIFIED_DATA')
+    train = root / 'sft/train'
+    if train.exists() and any(train.iterdir()):
+        raise RuntimeError('MIXED_DIRECT_START_CANNOT_REPLAY_EXISTING_LONG_TRAINING')
+    marker = root / 'PIPELINE_STARTED.json'
+    if not marker.exists(): return
+    state = json.loads((root / 'STATUS.json').read_text())
+    if state.get('status') not in ('STOPPED_HARD_ERROR', 'USER_PAUSED'):
+        raise RuntimeError('MIXED_DIRECT_START_REQUIRES_STOPPED_PREDECESSOR')
+    proc = Path(f"/proc/{state.get('pid', 0)}")
+    if proc.exists() and not proc.joinpath('stat').read_text().split(') ')[1].startswith('Z'):
+        raise RuntimeError('MIXED_PREVIOUS_COORDINATOR_STILL_RUNNING')
+    verify_mixed_ready(load_config(root / 'configs/sft.yaml'))
+    archive = root / 'recovery' / time.strftime('%Y%m%dT%H%M%SZ_direct_sft', time.gmtime())
+    archive.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(root / 'STATUS.json', archive / 'STATUS.json')
+    marker.replace(archive / marker.name)
+    write_json_atomic(archive / 'RECOVERY.json', {'reason': 'explicit user skip of SFT GPU acceptance',
+        'authorization_sha256': authorization, 'previous_state': state,
+        'verified_data_reused': True, 'existing_smoke_outputs_retained': True,
+        'long_training_replayed': False, 'old_dimo_restart': False})
+
+
 class MixedRun(Run):
     def __init__(self, args):
         super().__init__(args)
@@ -110,13 +148,16 @@ class MixedRun(Run):
         write_json(self.root / "PIPELINE_STARTED.json", {"git_sha": self.sha, "scope": MODE, "total_rows": ROWS,
                    "epoch7_checkpoint": str(self.a.previous_experiment / "sft/train/checkpoint-3843"),
                    "additional_epochs": 5, "release_upload": False, "old_dimo_restart": False})
-        self.phase = "parallel_download_screen_translate"; self.state("RUNNING")
-        self.command([sys.executable, ROOT / "scripts/data/incremental_mixed_preparation.py",
-                      "--experiment-root", self.root], "incremental_preparation")
-        self.wait_downloads(); self.assert_code()
-        self.phase = "screen_translate_freeze"; self.state("RUNNING")
-        self.command([sys.executable, ROOT / "scripts/data/prepare_mixed30k_corpus.py", "--experiment-root",
-                      self.root, "--previous-experiment", self.a.previous_experiment], "prepare_corpus")
+        if self.a.start_from_ready:
+            self.phase = 'reusing_verified_frozen_20k'; self.state('RUNNING')
+        else:
+            self.phase = "parallel_download_screen_translate"; self.state("RUNNING")
+            self.command([sys.executable, ROOT / "scripts/data/incremental_mixed_preparation.py",
+                          "--experiment-root", self.root], "incremental_preparation")
+            self.wait_downloads(); self.assert_code()
+            self.phase = "screen_translate_freeze"; self.state("RUNNING")
+            self.command([sys.executable, ROOT / "scripts/data/prepare_mixed30k_corpus.py", "--experiment-root",
+                          self.root, "--previous-experiment", self.a.previous_experiment], "prepare_corpus")
         self.assert_code()
         sft = load_config(self.root / "configs/sft.yaml"); ready = verify_mixed_ready(sft)
         # Four smoke/resume states + five epoch candidates + one atomic save + metrics/images margin.
@@ -150,12 +191,18 @@ class MixedRun(Run):
         write_json(self.root / "selection_preregistration.json", prereg)
         smoke = self.root / "sft/smoke2";fresh = self.root / "sft/fresh20";resumed = self.root / "sft/resume20"
         self.assert_code()
-        self.train("sft", smoke, 2);self.train("sft", fresh, 20);self.train("sft", resumed, 10)
-        self.train("sft", resumed, 20, resumed / "checkpoint-10")
-        acceptance = compare(fresh / "checkpoint-20", resumed / "checkpoint-20", fresh_log=fresh / "train_metrics.jsonl",
-                             interrupted_logs=[resumed / "train_metrics.jsonl"])
-        acceptance.update(evidence="REAL_4_A800", gpu_peak_allocated_bytes={"smoke2": memory_peaks(smoke, "sft"),
-            "fresh20": memory_peaks(fresh, "sft"), "resume20": memory_peaks(resumed, "sft")})
+        if self.a.skip_sft_gpu_acceptance:
+            authorization = verify_skip_sft_acceptance(self.root)
+            acceptance = {'status': 'SKIPPED_BY_EXPLICIT_USER_REQUEST', 'evidence': 'NOT_TESTED',
+                          'authorization_sha256': authorization, 'bitwise_resume_equivalence': 'NOT_TESTED',
+                          'existing_smoke_outputs_retained': True}
+        else:
+            self.train("sft", smoke, 2);self.train("sft", fresh, 20);self.train("sft", resumed, 10)
+            self.train("sft", resumed, 20, resumed / "checkpoint-10")
+            acceptance = compare(fresh / "checkpoint-20", resumed / "checkpoint-20", fresh_log=fresh / "train_metrics.jsonl",
+                                 interrupted_logs=[resumed / "train_metrics.jsonl"])
+            acceptance.update(evidence="REAL_4_A800", gpu_peak_allocated_bytes={"smoke2": memory_peaks(smoke, "sft"),
+                "fresh20": memory_peaks(fresh, "sft"), "resume20": memory_peaks(resumed, "sft")})
         write_json(self.root / "admission/SFT_CUDA_ACCEPTANCE.json", acceptance)
         train = self.root / "sft/train"
         self.monitor("sft", train); self.assert_code(); self.train("sft", train)
@@ -216,6 +263,8 @@ def main():
     parser.add_argument("--experiment-root", type=Path, required=True)
     parser.add_argument("--previous-experiment", type=Path, required=True)
     parser.add_argument("--recover-pretraining", action="store_true")
+    parser.add_argument('--start-from-ready', action='store_true', help='reuse the verified immutable 20K without preparing it again')
+    parser.add_argument('--skip-sft-gpu-acceptance', action='store_true', help='explicit user skip of smoke/fresh/resume acceptance')
     parser.add_argument("--allow-shared-gpus", action="store_true",
                         help="explicit user authorization to coexist with current GPU jobs")
     args = parser.parse_args();args.upload_curves = False;args.monitor_token_file = None
@@ -228,6 +277,8 @@ def main():
     try:
         if args.recover_pretraining:
             recover_pretraining(args.experiment_root)
+        if args.start_from_ready:
+            recover_ready_training(args.experiment_root)
         run.execute()
     except BaseException as exc:
         run.failed.set();run.stop_children()
