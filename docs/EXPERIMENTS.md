@@ -214,3 +214,19 @@ DiMO 使用完整 FP32 Student/Auxiliary/EMA、线性 surrogate、训练与推�
 DiMO 在已完整提交的 epoch checkpoint 处退出四卡 worker，再评测固定 DEV32，并从完整状态恢复；不占用训练峰值显存。
 硬错误停止，禁止自动调整 batch、分辨率或精度。`STATUS.json` 记录真实阶段，两个轻量报告在 `reports/`。
 本次只生成本地曲线，用户已取消 Release 上传；上述命令没有上传选项。
+
+用户在 DEV128 预评测后明确要求停止 SFT，指定 epoch7 / step3843 进入 DiMO。
+先停止原 SFT 协调器及其训练进程；新入口只运行 DiMO，保留完整 GPU smoke/resume 验收。
+`USER_SELECTED` 使用独立记录格式，标明跳过完整 DEV 选模，绑定 checkpoint、数据与用户指令；不能成为 D200K 正式 Teacher。
+原 SFT checkpoint 不变，Student/Auxiliary/EMA 和两套 optimizer 从 DiMO step0 重新初始化。
+
+```bash
+.venv/bin/python scripts/train/run_magicbrush_user_selected_dimo.py \
+  --experiment-root "$MB_EXPERIMENT_ROOT" \
+  --teacher-checkpoint "$MB_EXPERIMENT_ROOT/sft/train/checkpoint-3843" \
+  --teacher-epoch 7 \
+  --user-request-record "$MB_EXPERIMENT_ROOT/USER_EPOCH7_DIMO_OVERRIDE.json" \
+  --user-instruction '停止训练，直接用现在的epoch7进入DiMO训练'
+```
+
+启动要求当前代码 SHA 的 `admission/DIMO_EPOCH7_CPU_ACCEPTANCE.json`；不得覆盖已有 DiMO 输出或自动重试硬错误。

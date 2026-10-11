@@ -32,6 +32,10 @@ def main():
                    f"Fallback reason: {selection['fallback_reason']}.",
                    f"Selected checkpoint hash: `{selection['selected_checkpoint_hash']}`."]
         shutil.copyfile(root/'TEACHER_SELECTION.json',stage/'TEACHER_SELECTION.json')
+        if selection.get('selection_status')=='USER_SELECTED':
+            report += ['Teacher selection: USER_SELECTED by explicit user instruction; full DEV candidate selection was skipped.',
+                       'SFT was stopped early. This is an exploratory Teacher, not a passed formal or full-DEV selection.',
+                       f"User instruction: {selection['user_request']['instruction']}"]
     report += ['', '## Training and precision','',
                'Transformer/region parameters, gradients, AdamW moments and EMA: FP32; CUDA forward: BF16 autocast.',
                'Frozen CLIP/Gemma/VQ are shared. No LoRA in trained Student/Auxiliary.',

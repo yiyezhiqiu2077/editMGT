@@ -121,7 +121,12 @@ def load_dense_teacher_contract(root, *, expected_base_identity=None):
             raise RuntimeError('MAGICBRUSH_TEACHER_CANNOT_BE_FORMAL')
         if sha256_file(root/'selection_record.json')!=manifest.get('selection_record_sha256'):
             raise RuntimeError('MAGICBRUSH_TEACHER_SELECTION_RECORD_CHANGED')
-        verify_selection_record(json.loads((root/'selection_record.json').read_text()),identity['checkpoint_sha256'])
+        record=json.loads((root/'selection_record.json').read_text())
+        verify_selection_record(record,identity['checkpoint_sha256'])
+        if record.get('selection_status')=='USER_SELECTED':
+            metadata=json.loads((root/'metadata.json').read_text())
+            if metadata['global_optimizer_step']!=record['selected_step']:
+                raise RuntimeError('MAGICBRUSH_USER_SELECTED_EXPORTED_STEP_MISMATCH')
     else:
         raise RuntimeError("DENSE_TEACHER_STATUS_INVALID")
     ledger = json.loads((root / "COMPLETED.json").read_text())["files"]

@@ -108,15 +108,18 @@ def main():
             base = released_base_model_identity(components.identity)
             bundle = teacher_bundle_fingerprint(config["teacher_checkpoint"], base_model_identity=base, formal=not is_magicbrush(config))
             record = json.loads((Path(config["teacher_checkpoint"]) / "selection_record.json").read_text())
-            prereg = record["selection_preregistration"]
             if is_magicbrush(config):
                 from src.dimo.magicbrush_selection import verify_selection_record
                 from src.explicit_region.dense_checkpoint import verify_dense_checkpoint
                 verify_selection_record(record, verify_dense_checkpoint(config['teacher_checkpoint'])['checkpoint_sha256'])
-                if prereg['train_manifest_sha256'] != manifest_hash:
+                source_identity = (record['data_identity'] if record['selection_status']=='USER_SELECTED'
+                                   else record['selection_preregistration'])
+                if source_identity['train_manifest_sha256'] != manifest_hash:
                     raise RuntimeError('MAGICBRUSH_TEACHER_TRAIN_IDENTITY_CHANGED')
-            elif prereg.get("protocol") != "full-dense-selection-v2" or prereg["train_manifest_sha256"] != manifest_hash:
-                raise RuntimeError("FULL_DIMO_TEACHER_SOURCE_GROUP_SELECTION_NOT_VERIFIED")
+            else:
+                prereg = record["selection_preregistration"]
+                if prereg.get("protocol") != "full-dense-selection-v2" or prereg["train_manifest_sha256"] != manifest_hash:
+                    raise RuntimeError("FULL_DIMO_TEACHER_SOURCE_GROUP_SELECTION_NOT_VERIFIED")
             roles = initialize_dense_model_roles(components.transformer, config["teacher_checkpoint"], expected_base_identity=base).to(device)
             freeze_modules([components.text_encoder, components.llm_encoder, components.vqvae])
             for model in (components.text_encoder, components.llm_encoder, components.vqvae):

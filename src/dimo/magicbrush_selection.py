@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from src.explicit_region.checkpoint import recipe_fingerprint
 from src.explicit_region.contracts import sha256_file
@@ -81,7 +82,61 @@ def select(plan, registration, baseline_metrics, candidate_metrics):
             'selection_preregistration':registration}
 
 
+def user_select(plan, checkpoint, *, epoch, instruction, authorization_sha256):
+    """Content-bound explicit user choice; never claim DEV selection passed."""
+    checkpoint = Path(checkpoint).resolve()
+    identity = verify_dense_checkpoint(checkpoint)
+    metadata = json.loads((checkpoint/'metadata.json').read_text())
+    rows = sum(bool(line.strip()) for line in Path(plan['train_manifest']).read_text().splitlines())
+    step = metadata['global_optimizer_step']
+    if (not isinstance(epoch, int) or epoch <= 0 or rows % 16 or step != epoch*(rows//16)
+            or str(checkpoint) != str(Path(plan['candidate_checkpoints'].get(str(step), '')).resolve())):
+        raise RuntimeError('MAGICBRUSH_USER_SELECTED_EPOCH_MISMATCH')
+    baseline = verify_dense_checkpoint(plan['baseline_checkpoint'])
+    payload = json.loads((checkpoint/'fingerprint.json').read_text())['payload']
+    baseline_payload = json.loads((Path(plan['baseline_checkpoint'])/'fingerprint.json').read_text())['payload']
+    train_hash = sha256_file(plan['train_manifest'])
+    if (payload.get('experiment_mode') != 'magicbrush_exploratory'
+            or payload['model_identity'] != baseline_payload['model_identity']
+            or payload['data_content_hashes']['data.manifest']['sha256'] != train_hash):
+        raise RuntimeError('MAGICBRUSH_USER_SELECTED_SOURCE_IDENTITY_MISMATCH')
+    record = {'schema':'magicbrush-user-selected-teacher-v1','selection_scope':'magicbrush_exploratory',
+              'formal_teacher':False,'selection_status':'USER_SELECTED','teacher_source':'dense_sft_user_selected',
+              'selected_checkpoint':str(checkpoint),'selected_step':step,'selected_epoch':epoch,
+              'selected_checkpoint_hash':identity['checkpoint_sha256'],'baseline_checkpoint_hash':baseline['checkpoint_sha256'],
+              'fallback_reason':None,'quality_metrics':[],'full_dev_selection_performed':False,
+              'selection_preregistration':None,'dev_plan_hash':recipe_fingerprint(plan),
+              'data_identity':{'train_manifest_sha256':train_hash,'train_rows':rows,
+                  'dev_manifest_sha256':sha256_file(plan['dev_manifest']),
+                  'dev32_manifest_sha256':sha256_file(plan['dev32_manifest'])},
+              'user_request':{'instruction':instruction,'authorization_record_sha256':authorization_sha256}}
+    record['record_sha256'] = recipe_fingerprint(record)
+    verify_selection_record(record, identity['checkpoint_sha256'])
+    return record
+
+
+def verify_user_selection_record(record, checkpoint_hash):
+    request = record.get('user_request', {})
+    data = record.get('data_identity', {})
+    if (record.get('selection_scope') != 'magicbrush_exploratory' or record.get('formal_teacher') is not False
+            or record.get('selection_status') != 'USER_SELECTED' or record.get('teacher_source') != 'dense_sft_user_selected'
+            or record.get('full_dev_selection_performed') is not False or record.get('selection_preregistration') is not None
+            or record.get('selected_checkpoint_hash') != checkpoint_hash
+            or record.get('record_sha256') != recipe_fingerprint({k:v for k,v in record.items() if k!='record_sha256'})
+            or not isinstance(request.get('instruction'),str) or not request['instruction'].strip()
+            or not re.fullmatch('[0-9a-f]{64}',str(request.get('authorization_record_sha256','')))
+            or any(not re.fullmatch('[0-9a-f]{64}',str(data.get(key,''))) for key in
+                   ('train_manifest_sha256','dev_manifest_sha256','dev32_manifest_sha256'))):
+        raise RuntimeError('MAGICBRUSH_USER_SELECTED_RECORD_INVALID')
+    rows, epoch, step = data.get('train_rows'), record.get('selected_epoch'), record.get('selected_step')
+    if (type(rows) is not int or rows <= 0 or rows%16 or type(epoch) is not int or epoch <= 0
+            or type(step) is not int or step != epoch*(rows//16)):
+        raise RuntimeError('MAGICBRUSH_USER_SELECTED_EPOCH_MISMATCH')
+
+
 def verify_selection_record(record, checkpoint_hash):
+    if record.get('schema') == 'magicbrush-user-selected-teacher-v1':
+        return verify_user_selection_record(record, checkpoint_hash)
     prereg=record.get('selection_preregistration',{})
     if (record.get('schema')!='magicbrush-teacher-selection-v1' or record.get('selection_scope')!='magicbrush_exploratory'
             or record.get('formal_teacher') is not False or record.get('selection_status') not in ('SELECTED','FALLBACK')
