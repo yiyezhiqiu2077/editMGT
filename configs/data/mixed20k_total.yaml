@@ -3,8 +3,8 @@ schema_version: mixed20k-total-v1
 train_total: 20000
 dataset_policy:
   magicbrush: {use_all_eligible: true, fixed_count: 8784}
-  crispedit: {cap: 2000}
-  scaleedit: {cap: 7000}
+  crispedit: {cap: 2400}
+  scaleedit: {cap: 7200}
   interedit: {fill_remaining: true, only_better_data: true}
 mirror:
   initial_candidate_rows: {crispedit: 6000, scaleedit: 9000}

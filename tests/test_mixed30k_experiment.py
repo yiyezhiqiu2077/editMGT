@@ -31,6 +31,31 @@ def test_registered_mixed_recipe_is_independent_of_formal_and_magicbrush():
     validate_dense_config(magic)
 
 
+def test_registered_dataset_quotas_match_selection_config():
+    from src.explicit_region.mixed_experiment import COUNTS, ROWS
+    c = _load_unexpanded(Path("configs/data/mixed20k_total.yaml"))
+    assert ROWS == c["train_total"] == 20000
+    assert COUNTS == {"magicbrush": c["dataset_policy"]["magicbrush"]["fixed_count"],
+                     "crispedit": c["dataset_policy"]["crispedit"]["cap"],
+                     "scaleedit": c["dataset_policy"]["scaleedit"]["cap"],
+                     "interedit": 1616}
+
+
+def test_explicit_recovery_archives_preparation_failure_and_forbids_replaying_training(tmp_path):
+    import json
+    from scripts.train.run_mixed30k_continuation import recover_pretraining
+    marker = tmp_path / "PIPELINE_STARTED.json"; marker.write_text('{}')
+    state = tmp_path / "STATUS.json"
+    state.write_text(json.dumps({"status": "STOPPED_HARD_ERROR", "phase": "screen_translate_freeze", "pid": 999999999}))
+    (tmp_path / "sft/train/checkpoint-1").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="PRETRAINING_ONLY"): recover_pretraining(tmp_path)
+    (tmp_path / "sft/train/checkpoint-1").rmdir()
+    recover_pretraining(tmp_path)
+    assert not marker.exists()
+    assert len(list((tmp_path / "recovery").glob('*/PIPELINE_STARTED.json'))) == 1
+    assert len(list((tmp_path / "recovery").glob('*/RECOVERY.json'))) == 1
+
+
 @pytest.mark.parametrize("field,value", [("world_size", 8), ("epochs", 10),
     ("max_optimizer_steps", 5490), ("scheduler_horizon_steps", 5490), ("initial_dense_checkpoint", None)])
 def test_mixed_budget_and_warmstart_cannot_silently_change(field, value):

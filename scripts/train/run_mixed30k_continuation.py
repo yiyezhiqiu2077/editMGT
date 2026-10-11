@@ -32,6 +32,28 @@ def choose(candidates):
     return min(eligible, key=lambda row: (row["inside_mean"], row["step"])) if eligible else None
 
 
+def recover_pretraining(root):
+    """Explicit continuation only; never replay accepted or trained experiments."""
+    marker = root / "PIPELINE_STARTED.json"
+    state = json.loads((root / "STATUS.json").read_text())
+    if (not marker.exists() or state.get("status") != "STOPPED_HARD_ERROR"
+            or state.get("phase") not in ("parallel_download_screen_translate", "mirror_downloads", "screen_translate_freeze")
+            or (root / "data/MIXED_READY.json").exists()
+            or any((root / "sft").rglob("checkpoint-*"))):
+        raise RuntimeError("MIXED_RECOVERY_REQUIRES_FAILED_PRETRAINING_ONLY")
+    proc = Path(f"/proc/{state.get('pid', 0)}")
+    if proc.exists() and not proc.joinpath("stat").read_text().split(") ")[1].startswith("Z"):
+        raise RuntimeError("MIXED_PREVIOUS_COORDINATOR_STILL_RUNNING")
+    archive = root / "recovery" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    archive.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(root / "STATUS.json", archive / "STATUS.json")
+    marker.replace(archive / marker.name)
+    write_json_atomic(archive / "RECOVERY.json", {"explicit_pretraining_recovery": True,
+        "previous_failure": state, "total_rows": ROWS, "dataset_counts": COUNTS,
+        "reason": "user continuation; replace insufficient InterEdit quota with already screened reserves",
+        "training_checkpoints_present": False, "old_dimo_restart": False})
+
+
 class MixedRun(Run):
     def __init__(self, args):
         super().__init__(args)
@@ -176,6 +198,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment-root", type=Path, required=True)
     parser.add_argument("--previous-experiment", type=Path, required=True)
+    parser.add_argument("--recover-pretraining", action="store_true")
     args = parser.parse_args();args.upload_curves = False;args.monitor_token_file = None
     args.experiment_root = args.experiment_root.resolve();args.previous_experiment = args.previous_experiment.resolve()
     lock = (args.experiment_root / ".coordinator.lock").open("a")
@@ -184,6 +207,8 @@ def main():
     for number in (signal.SIGINT, signal.SIGTERM):
         signal.signal(number, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt("mixed pipeline interrupted")))
     try:
+        if args.recover_pretraining:
+            recover_pretraining(args.experiment_root)
         run.execute()
     except BaseException as exc:
         run.failed.set();run.stop_children()

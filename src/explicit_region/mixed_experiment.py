@@ -6,7 +6,7 @@ from pathlib import Path
 from .contracts import sha256_file
 
 MODE = "mixed20k_epoch7_continuation"
-COUNTS = {"magicbrush": 8784, "crispedit": 2000, "scaleedit": 7000, "interedit": 2216}
+COUNTS = {"magicbrush": 8784, "crispedit": 2400, "scaleedit": 7200, "interedit": 1616}
 ROWS = sum(COUNTS.values())
 
 

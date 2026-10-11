@@ -91,6 +91,28 @@ def test_payload_identity_detects_same_size_corruption(tmp_path):
     with pytest.raises(RuntimeError, match='hash changed'): verify_payload(path, e)
 
 
+def test_completed_preparation_reuse_requires_cohort_translation_and_pool_identity(tmp_path, monkeypatch):
+    import scripts.data.incremental_mixed_preparation as prep
+    from src.explicit_region.language import JsonlTranslationCache, translation_cache_key
+    data = tmp_path / 'data'; data.mkdir()
+    pools = {'interedit': {'accepted_rows': 1, 'sha256': 'a' * 64}}
+    marker = data / 'INCREMENTAL_COMPLETE.json'
+    marker.write_text(json.dumps({'status': 'COMPLETE', 'download_plan_sha256': 'plan', 'pools': pools}))
+    plan = {'datasets': {'nllb': {'root': str(tmp_path), 'files': [], 'revision': 'b' * 40}}}
+    monkeypatch.setattr(prep, 'early_translation_requests', lambda _: [{'instruction_original': '添加猫'}])
+    monkeypatch.setattr(prep, 'merge_cached_pools', lambda *_: pools)
+    with pytest.raises(RuntimeError, match='cohort changed'):
+        prep.reuse_complete_preparation(tmp_path, plan, 'different')
+    assert not prep.reuse_complete_preparation(tmp_path, plan, 'plan')
+    key = translation_cache_key('添加猫', 'nllb', 'b' * 40, 'zho_Hans', 'eng_Latn',
+                                {'do_sample': False, 'num_beams': 1, 'max_new_tokens': 128})
+    JsonlTranslationCache(data / 'translation_cache.jsonl').append({'cache_key': key, 'translated_text': 'Add a cat'})
+    assert prep.reuse_complete_preparation(tmp_path, plan, 'plan')
+    monkeypatch.setattr(prep, 'merge_cached_pools', lambda *_: {})
+    with pytest.raises(RuntimeError, match='pool content changed'):
+        prep.reuse_complete_preparation(tmp_path, plan, 'plan')
+
+
 def test_early_translation_is_bounded_and_does_not_claim_pixel_admission(tmp_path):
     metadata = tmp_path / 'metadata/first.jsonl.gz'; metadata.parent.mkdir()
     common = {'sample_id': 1, 'source_id': 2, 'edit_type': 'Add', 'better_data': True,

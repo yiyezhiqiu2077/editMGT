@@ -16,8 +16,15 @@ children also remove proxy environment variables. No reverse proxy is used.
 
 ## Preregistered candidate and final selection
 
-Final target: CrispEdit 2,000 + ScaleEdit 7,000 + InterEdit 2,216 +
+Final target: CrispEdit 2,400 + ScaleEdit 7,200 + InterEdit 1,616 +
 the exact existing 8,784 MagicBrush training turns = 20,000.
+
+The first complete screening yielded only 1,880 eligible InterEdit rows.
+After frozen auxiliary groups and translation QA, 1,688 remained. Before
+any training or new model evaluation, the original 2,216 InterEdit quota
+was reduced and already eligible CrispEdit/ScaleEdit reserves replaced it.
+Total rows and the five-epoch step budget remain unchanged. This decision
+uses candidate eligibility only, without DEV metric feedback or extra downloads.
 
 The initial 12K/12K/6K proposal was revised **before any training or DEV
 evaluation**: a real CrispEdit geometry pilot found frequent source/target
@@ -132,3 +139,6 @@ are prioritized. `PREPARATION_STATUS.json` tracks actual screening and
 translation. The coordinator monitors downloads, freezes the corpus,
 checks admission, trains and evaluates automatically. Hard failures are
 recorded in `STATUS.json`; there is no implicit failure recovery.
+An explicit `--recover-pretraining` permits a user-requested continuation
+only after a preparation failure, before READY or any SFT checkpoints.
+It archives the old start marker and records the prior failure and new quotas.

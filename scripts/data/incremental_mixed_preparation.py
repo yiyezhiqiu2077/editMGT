@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from src.explicit_region.contracts import sha256_file
 from src.explicit_region.formal_pipeline import write_json_atomic
 from src.explicit_region.interedit import iter_metadata
-from src.explicit_region.language import contains_han
+from src.explicit_region.language import JsonlTranslationCache, contains_han, translation_cache_key
 
 
 def planned_parquets(plan, name):
@@ -154,12 +154,41 @@ def downloader_alive(root):
             and b'download_mixed30k_mirror.py' in proc.joinpath('cmdline').read_bytes())
 
 
+def reuse_complete_preparation(root, plan, plan_hash):
+    """Verify completed candidate work once, without rescheduling hundreds of jobs."""
+    marker = root / 'data/INCREMENTAL_COMPLETE.json'
+    if not marker.exists():
+        return False
+    record = json.loads(marker.read_text())
+    if record.get('status') != 'COMPLETE' or record.get('download_plan_sha256') != plan_hash:
+        raise RuntimeError('completed preparation cohort changed')
+    model = plan['datasets']['nllb']
+    for entry in model['files']: verify_payload(Path(model['root']) / entry['rfilename'], entry)
+    cache = JsonlTranslationCache(root / 'data/translation_cache.jsonl')
+    decoding = {'do_sample': False, 'num_beams': 1, 'max_new_tokens': 128}
+    for row in early_translation_requests(plan):
+        key = translation_cache_key(row['instruction_original'], 'nllb', model['revision'],
+                                    'zho_Hans', 'eng_Latn', decoding)
+        if cache.get(key) is None:
+            return False
+    totals = merge_cached_pools(root, plan)
+    if totals != record['pools']:
+        raise RuntimeError('completed preparation pool content changed')
+    write_json_atomic(root / 'PREPARATION_STATUS.json', {'status': 'CANDIDATE_PREPARATION_COMPLETE',
+        'accepted_candidates': {name: row['accepted_rows'] for name, row in totals.items()},
+        'download_plan_sha256': plan_hash, 'translation': 'COMPLETE',
+        'verified_completed_cache_reused': True, 'final_training_admission': 'PENDING', 'test_read': False})
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--experiment-root', type=Path, required=True)
     parser.add_argument('--workers', type=int, default=4)
     args = parser.parse_args(); root = args.experiment_root.resolve()
     plan_path = root / 'DOWNLOAD_PLAN.json'; plan_hash = sha256_file(plan_path)
     plan = json.loads(plan_path.read_text()); submitted = set(); done = {}; running = {}
+    if reuse_complete_preparation(root, plan, plan_hash):
+        return
     jobs = [(name, [entry]) for name in ('crispedit', 'scaleedit') for entry in planned_parquets(plan, name)]
     jobs.append(('interedit', plan['datasets']['interedit']['files']))
     translation = None; translation_log = None; translated = False
