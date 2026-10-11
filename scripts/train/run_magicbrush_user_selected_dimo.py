@@ -75,6 +75,11 @@ class UserSelectedRun(Run):
         self.command([sys.executable,ROOT/'scripts/report/report_magicbrush_two_stage.py',
                       '--experiment-root',self.root,'--stage','sft'],'sft_user_stopped_report')
         smoke=self.root/'dimo/smoke2';fresh=self.root/'dimo/fresh20';resumed=self.root/'dimo/resume20'
+        self.dimo_pipeline(smoke,fresh,resumed)
+
+    def dimo_pipeline(self,smoke,fresh,resumed):
+        dimo=load_config(self.root/'configs/dimo.yaml')
+        record=json.loads((self.root/'TEACHER_SELECTION.json').read_text())
         self.train('dimo',smoke,2)
         self.train('dimo',fresh,20)
         self.train('dimo',resumed,10)

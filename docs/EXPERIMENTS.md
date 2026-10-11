@@ -230,3 +230,26 @@ DiMO 在已完整提交的 epoch checkpoint 处退出四卡 worker，再评测�
 ```
 
 启动要求当前代码 SHA 的 `admission/DIMO_EPOCH7_CPU_ACCEPTANCE.json`；不得覆盖已有 DiMO 输出或自动重试硬错误。
+
+首次四卡 DiMO 的 2-step 通过，fresh20 在 step20 的 BF16 logit 梯度审计处硬停止。
+原审计计算 `g / tokens / batch`，实际线性目标反向传播计算
+`g * ((1 / batch) / tokens)`。FP32 运算顺序不同，在 BF16 舍入中点可差一个 ULP。
+`reverse-roi-reduction-v2` 修正独立参考值的运算顺序；`rtol=1e-6, atol=0` 不变，
+训练 surrogate、训练配置和已有 checkpoint 不变。回归测试仍拒绝梯度归零、遗漏 ROI 和 vocabulary 归一化错误。
+
+用户明确说“继续”后，专用一次性恢复入口检查失败记录与配置 hash、epoch7 Teacher、
+当前提交的 CPU 验收和磁盘/GPU 条件。原失败输出保留，在 `dimo/audit_recovery_v1/`
+重新进行完整 2-step / fresh20 / fresh10→resume20 验收；新旧代码之间不继承 optimizer。
+验收通过后才从同一 Teacher 新建 `dimo/train`。新的硬错误仍停止，不自动重试。
+
+```bash
+.venv/bin/python scripts/diagnostics/audit_surrogate_reference.py \
+  --output "$MB_EXPERIMENT_ROOT/admission/DIMO_SURROGATE_REFERENCE_REGRESSION.json"
+.venv/bin/python scripts/train/continue_magicbrush_dimo_after_audit.py \
+  --experiment-root "$MB_EXPERIMENT_ROOT" \
+  --recovery-request "$MB_EXPERIMENT_ROOT/DIMO_AUDIT_RECOVERY_REQUEST.json" \
+  --cpu-acceptance "$MB_EXPERIMENT_ROOT/admission/DIMO_AUDIT_FIX_CPU_ACCEPTANCE.json"
+```
+
+恢复请求使用 `magicbrush-dimo-audit-recovery-v1`，含用户指令、失败 STATUS 的 SHA256，
+以及配置、Teacher 选择记录和 rank1/rank2 故障记录的 SHA256；开始标记防止再次隐式重试。

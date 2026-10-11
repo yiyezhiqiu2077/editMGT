@@ -8,11 +8,23 @@ def audit_surrogate_gradients(logits, gradient, mask):
         raise ValueError("audit requires real differentiable student logits")
     counts = mask.flatten(1).sum(1)
     shape = [len(counts)] + [1] * (logits.ndim - 1)
-    expected = gradient.detach().float() * mask[..., None] / counts.reshape(shape) / len(counts)
-    expected = expected.to(logits.dtype).float()
-    result = {"logits_dtype": str(logits.dtype), "expected_norm": float(expected.norm()), "objectives": {}}
+    # Reverse-mode traverses batch mean -> token mean -> vocabulary sum ->
+    # product. Calculate its FP32 scale before multiplying g, rather than
+    # dividing g first. Mathematically equal expressions can straddle a BF16
+    # rounding midpoint and differ by one BF16 ULP at the logit boundary.
+    # Keep the strict comparison; this is a reference correction, not a
+    # relaxed tolerance or a change to the training objective.
+    dtype = torch.float64 if logits.dtype == torch.float64 else torch.float32
+    scale = (torch.ones_like(counts, dtype=dtype) / len(counts)) / counts
+    expected = (gradient.detach().to(dtype) * scale.reshape(shape)).masked_fill(~mask[..., None].bool(), 0)
+    expected = expected.to(logits.dtype).to(dtype)
+    original = (gradient.detach().to(dtype) * mask[..., None] / counts.reshape(shape) / len(counts)).to(logits.dtype).to(dtype)
+    result = {"logits_dtype": str(logits.dtype), "expected_norm": float(expected.norm()),
+        "reference_version": "reverse-roi-reduction-v2", "comparison_rtol": 1e-6,
+        "comparison_atol": 0., "division_first_reference_max_absolute_difference": float((expected - original).abs().max()),
+        "division_first_reference_differing_elements": int((expected != original).sum()), "objectives": {}}
     for name, function in (("squared", surrogate_logit_loss), ("linear", linear_surrogate_logit_loss)):
-        actual = torch.autograd.grad(function(logits, gradient, mask), logits, retain_graph=True)[0].float()
+        actual = torch.autograd.grad(function(logits, gradient, mask), logits, retain_graph=True)[0].to(dtype)
         difference = actual - expected
         norm = float(actual.norm())
         reference = float(expected.norm())
