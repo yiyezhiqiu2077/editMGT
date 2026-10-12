@@ -16,7 +16,7 @@ from scripts.train.run_magicbrush_two_stage import Run
 from src.explicit_region.config import load_config
 from src.explicit_region.contracts import sha256_file
 from src.explicit_region.dense_checkpoint import verify_dense_checkpoint, write_json
-from src.dimo.mixed_experiment import FINAL_SFT_STEP, verify_ready, verify_request, select_last_teacher, export_last_teacher
+from src.dimo.mixed_experiment import FINAL_SFT_STEP, selected_sft_step, verify_ready, verify_request, select_last_teacher, export_last_teacher
 from src.dimo.mixed_storage import whole_handoff_budget
 from src.dimo.runtime import gpu_admission
 
@@ -55,7 +55,9 @@ class AutoRun(Run):
         super().__init__(args)
         self.owns_training = False
         self.source_lock = None
-        self.request_path = self.root / 'USER_AUTO_LAST_SFT_DIMO.json'
+        self.selected_epoch = getattr(args, 'selected_sft_epoch', 5)
+        self.selected_step = self.selected_epoch * 1250
+        self.request_path = self.root / ('USER_SELECTED_SFT_DIMO.json' if self.selected_epoch == 3 else 'USER_AUTO_LAST_SFT_DIMO.json')
         self.request_sha = sha256_file(self.request_path)
         self.env.update(MIXED_EXPERIMENT_ROOT=str(self.root),
                         PREVIOUS_EXPERIMENT_ROOT=str(args.previous_experiment),
@@ -69,7 +71,7 @@ class AutoRun(Run):
     def state(self, status, **values):
         payload = {'status': status, 'phase': self.phase, 'git_sha': self.sha, 'pid': os.getpid(),
                    'updated_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                   'sft_final_step': FINAL_SFT_STEP, 'dimo_epochs': 5, 'dimo_steps': 25000, **values}
+                   'sft_final_step': self.selected_step, 'dimo_epochs': 5, 'dimo_steps': 25000, **values}
         write_json(self.root / 'DIMO_HANDOFF_STATUS.json', payload)
         if self.owns_training:
             super().state(status, **values)
@@ -88,6 +90,14 @@ class AutoRun(Run):
         while True:
             self.assert_code_request()
             state = json.loads((self.root / 'STATUS.json').read_text())
+            if selected_sft_step(config) == 3750:
+                if (state.get('status') != 'SFT_STOPPED_FOR_USER_SELECTED_TEACHER'
+                        or state.get('selected_step') != 3750
+                        or state.get('authorization_sha256') != self.request_sha
+                        or live_process(state.get('pid', 0))
+                        or not (checkpoint / 'COMPLETED.json').is_file()):
+                    raise RuntimeError('MIXED_DIMO_SELECTED_EPOCH_REQUIRES_EXPLICIT_STOPPED_SFT')
+                return state
             if state.get('status') == 'USER_PAUSED':
                 self.state('WAITING_USER_PAUSED_SFT'); time.sleep(30); continue
             if sft_success_state(state) and (checkpoint / 'COMPLETED.json').is_file():
@@ -126,20 +136,27 @@ class AutoRun(Run):
         marker = self.root / 'DIMO_AUTO_HANDOFF_STARTED.json'
         if marker.exists(): raise RuntimeError('MIXED_DIMO_HANDOFF_ALREADY_STARTED_NO_IMPLICIT_RETRY')
         config = load_config(ROOT / 'configs/dimo/full_dense_mixed20k_4a800_5epoch.yaml')
+        if self.selected_epoch == 3:
+            config.update(selected_sft_step=self.selected_step,
+                          sft_final_checkpoint=str(self.root / 'sft/train/checkpoint-3750'),
+                          user_transition_record=str(self.request_path),
+                          experiment='Full-DenseDiMO-Mixed20K-UserSFT-Epoch3-4A800-5Epoch')
         request = verify_request(config)
         budget = whole_handoff_budget(self.root, self.a.secondary_root, 1009307648,
-                                      evaluation_root=self.a.evaluation_root)
+                                      evaluation_root=self.a.evaluation_root,
+                                      sft_stopped=self.selected_epoch == 3)
         write_json(self.root / 'admission/DIMO_AUTO_WHOLE_DISK_BUDGET.json', budget)
         if budget['status'] != 'PASS': raise RuntimeError('MIXED_DIMO_WHOLE_HANDOFF_STORAGE_INSUFFICIENT')
         write_json(marker, {'git_sha': self.sha, 'authorization_sha256': self.request_sha,
-                           'teacher_selection': 'USER_LAST_EPOCH', 'final_step': FINAL_SFT_STEP,
+                           'teacher_selection': 'USER_SELECTED_EPOCH' if self.selected_epoch == 3 else 'USER_LAST_EPOCH',
+                           'final_step': self.selected_step,
                            'dimo_epochs': 5, 'dimo_steps': 25000, 'old_dimo_restart': False})
         state = self.wait_sft(config)
         self.assert_code_request(); ready = verify_ready(config); record = select_last_teacher(config)
         self.acquire_training(state)
         if (self.root / 'selected_teacher').exists() or (self.root / 'dimo').exists():
             raise RuntimeError('MIXED_DIMO_REQUIRES_NEW_OUTPUTS')
-        self.phase = 'exporting_user_requested_final_sft_teacher'; self.state('RUNNING')
+        self.phase = 'exporting_user_requested_sft_teacher'; self.state('RUNNING')
         write_json(self.root / 'TEACHER_SELECTION.json', record)
         export_last_teacher(record, self.root / 'selected_teacher')
         import yaml
@@ -147,7 +164,7 @@ class AutoRun(Run):
         plan = json.loads((self.root / 'evaluation_plan.json').read_text())
         write_json(self.root / 'evaluation_plan.before_user_last_dimo.json', plan)
         plan.update(teacher_checkpoint=config['teacher_checkpoint'],
-                    selection_rules={'method': 'USER_LAST_EPOCH', 'sft_final_step': FINAL_SFT_STEP,
+                    selection_rules={'method': record['selection_status'], 'sft_final_step': self.selected_step,
                                      'dev_quality_gate': False, 'authorization_sha256': self.request_sha})
         write_json(self.root / 'evaluation_plan.json', plan)
         secondary = self.a.secondary_root
@@ -175,7 +192,7 @@ class AutoRun(Run):
             self.dimo_eval(train, step, dev32=False)
         report = ['# Mixed20K automatic final-SFT DiMO', '', f'Code: {self.sha}',
                   f'Teacher: {record["selected_checkpoint"]}', f'Teacher hash: {record["selected_checkpoint_hash"]}',
-                  'Explicit user last-epoch choice; DEV scores were not a Teacher gate.',
+                  f'Explicit user choice: continuation epoch {record["selected_epoch"]}; DEV scores were not a Teacher gate.',
                   'Same frozen 20K manifest; 5 DiMO epochs / 25,000 Student updates.',
                   'r_init=1.0; sigma=0.3; CFG1; linear surrogate; FP32 parameters and moments; BF16 forward.',
                   'Teacher 12 steps/CFG5; Raw Student and EMA 1 step/CFG1; unchanged DEV527 and seeds [0,1].',
@@ -192,6 +209,8 @@ def main():
     parser.add_argument('--secondary-root', type=Path, required=True)
     parser.add_argument('--evaluation-root', type=Path, help='optional separate filesystem for final DEV images')
     parser.add_argument('--allow-shared-gpus', action='store_true', help='explicit user-authorized GPU coexistence')
+    parser.add_argument('--selected-sft-epoch', type=int, choices=(3, 5), default=5,
+                        help='explicit epoch3 override requires a bound USER_SELECTED_SFT_DIMO receipt and stopped SFT')
     args = parser.parse_args(); args.upload_curves = False; args.monitor_token_file = None
     args.experiment_root = args.experiment_root.resolve(); args.previous_experiment = args.previous_experiment.resolve()
     args.secondary_root = args.secondary_root.resolve()

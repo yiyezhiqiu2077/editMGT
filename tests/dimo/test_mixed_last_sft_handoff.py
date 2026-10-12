@@ -205,3 +205,70 @@ def test_frozen_manifest_and_roots_must_match_sft_exactly(tmp_path, monkeypatch)
     c['data']['roots']['interedit'] = '/another/corpus'
     with pytest.raises(RuntimeError, match='REUSE_EXACT_FROZEN_SFT_DATA'):
         mixed.verify_ready(c)
+
+
+def make_epoch3_checkpoint(tmp_path, monkeypatch):
+    c = make_final_checkpoint(tmp_path, monkeypatch, step=3750, cursor=60000)
+    old = Path(c['sft_final_checkpoint'])
+    checkpoint = old.with_name('checkpoint-3750')
+    old.rename(checkpoint)
+    c.update(selected_sft_step=3750, sft_final_checkpoint=str(checkpoint))
+    p = Path(c['user_transition_record'])
+    request = json.loads(p.read_text())
+    request.update(schema='mixed20k-user-selected-sft-dimo-v1',
+                   requested_action='dimo_from_user_selected_completed_sft_epoch',
+                   user_instruction='可以直接用第三轮的epoch进入DiMO训练',
+                   sft_final_step=3750, sft_additional_epochs=3,
+                   sft_final_checkpoint=str(checkpoint))
+    p.write_text(json.dumps(request))
+    return c
+
+
+def test_selected_epoch3_export_preserves_checkpoint_and_records_cumulative_epoch10(tmp_path, monkeypatch):
+    c = make_epoch3_checkpoint(tmp_path, monkeypatch)
+    assert mixed.verify_request(c)['sft_final_step'] == 3750
+    record = mixed.select_last_teacher(c)
+    assert (record['selected_step'], record['selected_epoch'], record['cumulative_sft_epoch']) == (3750, 3, 10)
+    assert record['selection_status'] == 'USER_SELECTED_EPOCH'
+    mixed.export_last_teacher(record, tmp_path / 'teacher')
+    contract = load_dense_teacher_contract(tmp_path / 'teacher')
+    assert contract.manifest['status'] == 'mixed20k_user_selected'
+    assert contract.formal_teacher is False
+    assert (tmp_path / 'teacher/model-00001.safetensors').read_bytes() == (Path(c['sft_final_checkpoint']) / 'model-00001.safetensors').read_bytes()
+    with pytest.raises(RuntimeError, match='NOT_SELECTED'):
+        dense_teacher_fingerprint(tmp_path / 'teacher', expected_base_identity=contract.manifest['base_model_identity'], formal=True)
+
+
+def test_epoch3_cannot_reuse_last_epoch_authorization_or_incorrect_samples(tmp_path, monkeypatch):
+    c = make_epoch3_checkpoint(tmp_path, monkeypatch)
+    p = Path(c['user_transition_record']); request = json.loads(p.read_text())
+    for field, value in [('schema', 'mixed20k-auto-last-sft-dimo-v1'), ('sft_final_step', 6250), ('sft_additional_epochs', 5)]:
+        p.write_text(json.dumps(request | {field: value}))
+        with pytest.raises(RuntimeError, match='REQUEST_MISMATCH'):
+            mixed.verify_request(c)
+    p.write_text(json.dumps(request))
+    record = mixed.select_last_teacher(c)
+    forged = record | {'cumulative_sft_epoch': 12}
+    forged['record_sha256'] = recipe_fingerprint({k: v for k, v in forged.items() if k != 'record_sha256'})
+    with pytest.raises(RuntimeError, match='RECORD_INVALID'):
+        mixed.verify_teacher_record(forged, record['selected_checkpoint_hash'])
+
+
+def test_epoch3_waiter_requires_bound_stop_receipt_and_dead_coordinator(tmp_path, monkeypatch):
+    checkpoint = tmp_path / 'checkpoint-3750'; checkpoint.mkdir()
+    (checkpoint / 'COMPLETED.json').write_text('{}')
+    run = object.__new__(handoff.AutoRun); run.root = tmp_path; run.request_sha = 'a' * 64
+    run.assert_code_request = lambda: None
+    c = {'selected_sft_step': 3750, 'sft_final_checkpoint': str(checkpoint)}
+    state = {'status': 'SFT_STOPPED_FOR_USER_SELECTED_TEACHER', 'selected_step': 3750,
+             'authorization_sha256': run.request_sha, 'pid': 123}
+    p = tmp_path / 'STATUS.json'; p.write_text(json.dumps(state))
+    monkeypatch.setattr(handoff, 'live_process', lambda _: True)
+    with pytest.raises(RuntimeError, match='EXPLICIT_STOPPED_SFT'):
+        run.wait_sft(c)
+    monkeypatch.setattr(handoff, 'live_process', lambda _: False)
+    p.write_text(json.dumps(state | {'authorization_sha256': 'b' * 64}))
+    with pytest.raises(RuntimeError, match='EXPLICIT_STOPPED_SFT'):
+        run.wait_sft(c)
+    p.write_text(json.dumps(state))
+    assert run.wait_sft(c) == state

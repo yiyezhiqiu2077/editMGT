@@ -35,7 +35,7 @@ def segment_budget(parameters, config, output, stop):
             'volumes': dict(volumes), 'retention': 'retain all checkpoints; no automatic deletion'}
 
 
-def whole_handoff_budget(root, secondary, parameters, *, evaluation_root=None):
+def whole_handoff_budget(root, secondary, parameters, *, evaluation_root=None, sft_stopped=False):
     """Include unfinished SFT saves and all new DiMO acceptance/training states."""
     root, secondary = Path(root), Path(secondary)
     primary_parent = existing_parent(root); secondary_parent = existing_parent(secondary)
@@ -47,6 +47,8 @@ def whole_handoff_budget(root, secondary, parameters, *, evaluation_root=None):
         verify_skip_sft_acceptance(root)
     sft_outputs = ([('smoke2', 2), ('fresh20', 20), ('resume20', 10), ('resume20', 20)] if not skip_record.exists() else [])
     sft_outputs += [('train', step) for step in (1250, 2500, 3750, 5000, 6250)]
+    if sft_stopped:
+        sft_outputs = []  # Current explicit handoff will not produce more SFT states.
     remaining_sft = sum(not (root / 'sft' / name / f'checkpoint-{step}/COMPLETED.json').exists()
                         for name, step in sft_outputs)
     # Primary: SFT, Teacher, smoke2 + initial inference, three resumes, atomic save.

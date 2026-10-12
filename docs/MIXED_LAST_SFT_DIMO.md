@@ -110,3 +110,15 @@ the active SFT `STATUS.json`. After ownership, both record the new run.
 `DIMO_AUTO_HANDOFF_STARTED.json`, `TEACHER_SELECTION.json`, the exported
 Teacher contract, `DIMO_STORAGE_LOCATIONS.json`, disk budgets, CUDA acceptance,
 resolved config, metrics and code SHA preserve the complete handoff identity.
+## User-selected continuation epoch 3
+
+The user may explicitly stop the continuation and choose its completed third epoch
+with `--selected-sft-epoch 3`. This requires `USER_SELECTED_SFT_DIMO.json`, a stopped
+SFT status bound to its SHA256, and the intact `checkpoint-3750`: 60,000 committed
+samples, continuation epoch 3 / cumulative SFT epoch 10. The original SFT recipe
+still records its planned 6,250-step budget; neither its fingerprint nor checkpoint
+metadata is rewritten. Exported Teacher status is `mixed20k_user_selected`, with
+selection `USER_SELECTED_EPOCH`, rather than claiming the last planned epoch.
+All existing SFT checkpoints and metrics are retained. DiMO continues to use the
+same frozen 20K, 5 epochs / 25,000 updates, r_init=1, and the existing DiMO
+acceptance procedure. Only the SFT Teacher selection changes.
