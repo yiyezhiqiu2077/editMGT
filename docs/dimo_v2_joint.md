@@ -70,7 +70,7 @@ Raw/EMA inference export 都包含完整 Student state（参数与 buffer）；E
 日志包含 preclip/postclip norm、触发标志和累计 clip_fraction，以及 attention/FFN/embed/MLM
 分组范数。冻结的 embed/MLM 范数必须为零。
 16 坐标抽样更新量明确记录为 `student_parameter_update_ratio_sampled`。
-指定诊断步 `[1,20,2500,7500,12500]` 才计算全部可训练坐标的 full update norm/ratio，
+指定诊断步 `[1,20,2000,6000,12000,12500]` 才计算全部可训练坐标的 full update norm/ratio，
 分母为更新前可训练参数的全 L2 范数；CPU snapshot 避免新增整模型 GPU 副本。
 累计裁剪计数随 checkpoint 保存与恢复。如实际长期 clip_fraction 接近 100%，
 应在实验报告中标记，代码不自动修改阈值。
@@ -80,7 +80,7 @@ Raw/EMA inference export 都包含完整 Student state（参数与 buffer）；E
 协议构建入口为 [prepare_dimo_v2_dev128.py](../scripts/eval/prepare_dimo_v2_dev128.py)。
 它只读检查已有 DEV128 manifest、原评测 plan、Teacher12 plan、旧 Raw/EMA 的每 rank
 身份和预测/PNG 哈希，并输出独立 v2 plan。已通过实文件验证的计划为：
-`/data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/dev128_plan_verified.json`。
+`/data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/dev128_plan_save2000.json`。
 
 manifest SHA256：`5dcbb70bc28126e226026c5f3f2836ce58c0642780b027a097f49626a986f731`。
 共 128 个样本、106 个 source groups；seeds=[0,1]；native 1024×1024 source/target/mask。
@@ -117,7 +117,7 @@ commit 前注入单 rank 故障，验证所有 rank 退出、整步不提交、�
 CPU synthetic 结果仅是实现验收证据。
 
 实际报告位于 `/data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/`：
-`cpu_pytest_final.xml` / `.log`、`preflight.json`、`resolved_mixed20k.yaml`、
+`cpu_pytest_final.xml` / `.log`、`preflight.json`、`resolved_mixed20k_save2000.yaml`、
 `gpu_smoke_preflight.log`，以及独立 CPU 连续/恢复运行与推理的验收结果。
 
 GPU 20-step smoke 入口如下（应等原四卡任务释放资源后使用）：
@@ -125,7 +125,7 @@ GPU 20-step smoke 入口如下（应等原四卡任务释放资源后使用）�
 ```bash
 cd /data02/zhangyuyang/code/editMGT-dimo-v2
 /data02/zhangyuyang/code/editMGT/.venv/bin/python scripts/train/run_dimo_v2.py \
-  --config /data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/resolved_mixed20k.yaml \
+  --config /data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/resolved_mixed20k_save2000.yaml \
   --mode smoke --output-dir /data/zhangyuyang/editmgt_dimo_v2_20261013/gpu_smoke
 ```
 
@@ -134,14 +134,19 @@ smoke 必须完成 20 个完整 step（160 sample consumptions）、完整 check
 checkpoint 重载、Raw/EMA 单图推理及 frozen-weight 审计，才能产生 `GPU_SMOKE_PASS.json`。
 自然梯度不触发裁剪可以通过 smoke；人工构造大梯度的单测负责验证裁剪行为。
 
-正式启动入口为同一个脚本的 `--mode train`，需要显式 `--confirm-long-run` 和
-同一 Git SHA/配置的 `--smoke-proof`，使用独立 train output。GPU smoke 未通过前
-不提供可直接启动的正式长跑命令，也不启动长训练。
+用户已授权 smoke 通过后自动启动长训练。按后续要求，长训每 2000 步保存完整可恢复
+checkpoint 与 Raw/EMA inference export：2000、4000、6000、8000、10000、12000，
+并额外保留最终 12500 步；step 0 仍保存初始 Raw/EMA。DEV plan 使用同一组导出步数。
+完整训练保存预算约 315611482685 bytes（约 316 GB）；保留 smoke 后完整链路约需 352 GB。
+
+正式启动入口为同一个脚本的 `--mode train`，由授权的连续执行脚本传入 `--confirm-long-run` 和
+同一 Git SHA/配置的 `--smoke-proof`，使用独立 train output。只有 GPU smoke 验收通过
+才执行后续长训练；启动授权已具备，不需再次确认。
 实际运行时必须保持工作树 clean，恢复要求同一配置、输出目录及 Git SHA。
 
-当前四张 A800 各已有约 50 GB 占用，smoke 的只读 admission 拒绝新任务。
+最新资源检查发现四张 A800 正在运行旧模型 step15000 DEV128 评测，smoke 的只读 admission 拒绝新任务。
 无 GPU 训练、实模型 Raw/EMA 单图生成或新 DEV 质量结果。
-完整训练保存预算约 159953224990 bytes（约 160 GB），当前 `/data` 仅余约 103 GB；
+最新检查时 `/data` 仅余约 66 GB；
 需要满足空间预算，代码不会自动删除旧数据或 checkpoint。
 本次未预设联合配方会改善质量。
 

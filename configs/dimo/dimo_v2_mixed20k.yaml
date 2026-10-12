@@ -25,9 +25,10 @@ distillation:
   auxiliary_train_cfg: 1.0
 epochs: 5
 max_optimizer_steps: 12500
-resume_checkpoint_steps: [2500, 7500, 12500]
-evaluation_steps: [0, 2500, 7500, 12500]
-full_update_diagnostic_steps: [1, 20, 2500, 7500, 12500]
+checkpoint_interval_steps: 2000
+resume_checkpoint_steps: [2000, 4000, 6000, 8000, 10000, 12000, 12500]
+evaluation_steps: [0, 2000, 4000, 6000, 8000, 10000, 12000, 12500]
+full_update_diagnostic_steps: [1, 20, 2000, 6000, 12000, 12500]
 output_dir: ${DIMO_V2_OUTPUT_ROOT}
 evaluation:
   plan: ${DIMO_V2_DEV_PLAN}

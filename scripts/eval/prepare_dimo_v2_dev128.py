@@ -62,7 +62,7 @@ def prepare(old_plan, old_results, output):
         "teacher_source_checkpoint_sha256": teacher.manifest["dense_checkpoint_sha256"], "teacher_query_cfg": 4.,
         "student_protocol": STUDENT_PROTOCOL, "teacher_protocol": TEACHER_PROTOCOL,
         "roi_crop_rule": ROI_CROP_RULE, "embedding_models": previous["embedding_models"],
-        "bootstrap": previous["bootstrap"], "steps": [0, 2500, 7500, 12500],
+        "bootstrap": previous["bootstrap"], "steps": [0, 2000, 4000, 6000, 8000, 10000, 12000, 12500],
         "historical": historical, "historical_identity_files": identities,
         "teacher12_plan": previous["teacher12_plan"], "teacher12_plan_sha256": previous["teacher12_plan_sha256"],
         "source_plan": str(old_plan.resolve()), "source_plan_sha256": sha256_file(old_plan)}

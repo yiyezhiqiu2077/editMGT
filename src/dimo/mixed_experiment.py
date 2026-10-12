@@ -30,7 +30,10 @@ def validate_budget(config):
     from .recipe import is_v2
     v2 = is_v2(config)
     horizon = 12500 if v2 else 25000
-    saves = [2500, 7500, 12500] if v2 else [5000, 15000, 25000]
+    saves = [*range(2000, horizon, 2000), horizon] if v2 else [5000, 15000, 25000]
+    if v2 and (type(config.get('checkpoint_interval_steps')) is not int
+               or config['checkpoint_interval_steps'] != 2000):
+        raise RuntimeError('MIXED_DIMO_V2_CHECKPOINT_INTERVAL_CHANGED')
     if (not is_mixed_dimo(config) or config['formal_ready'] is not False
             or (config['distributed']['world_size'], config['epochs'], config['batch_per_gpu'],
                 config['gradient_accumulation'], config['max_optimizer_steps'], config['optimizer']['horizon_steps'],

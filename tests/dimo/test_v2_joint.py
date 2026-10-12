@@ -186,8 +186,24 @@ def test_mixed20k_budget_and_identity():
     budget = consumption_budget(c)
     assert budget["optimizer_steps"] == 12500 and budget["total_sample_consumptions"] == 100000
     assert budget["student_update_sample_consumptions"] == budget["auxiliary_update_sample_consumptions"] == 50000
+    assert c["checkpoint_interval_steps"] == 2000
+    assert c["resume_checkpoint_steps"] == [2000, 4000, 6000, 8000, 10000, 12000, 12500]
+    assert c["evaluation_steps"] == [0, *c["resume_checkpoint_steps"]]
     roles, _, _, _ = bundle()
     assert recipe_identity(c, roles)["budget"] == budget
     c["max_optimizer_steps"] = 25000
     with pytest.raises(RuntimeError, match="BUDGET"):
+        validate_full_config(c)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("checkpoint_interval_steps", 2500),
+    ("resume_checkpoint_steps", [2500, 7500, 12500]),
+    ("resume_checkpoint_steps", [2000, 4000, 6000, 8000, 10000, 12000]),
+    ("evaluation_steps", [0, 2500, 7500, 12500]),
+])
+def test_mixed20k_requires_every_2000_and_final_raw_ema_resume_exports(field, value):
+    c = _load_unexpanded(Path("configs/dimo/dimo_v2_mixed20k.yaml"))
+    c[field] = value
+    with pytest.raises(RuntimeError, match="CHECKPOINT_INTERVAL|BUDGET"):
         validate_full_config(c)
