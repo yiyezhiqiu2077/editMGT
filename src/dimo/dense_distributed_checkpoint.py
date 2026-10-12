@@ -12,14 +12,14 @@ from src.explicit_region.contracts import sha256_file
 
 
 def save_checkpoint(root, *, roles, optimizers, schedulers, ema, step, cursor, identity, config_hash,
-                    commit=None, sampler_state=None, loader_rng=None, inference_only=False):
+                    commit=None, sampler_state=None, loader_rng=None, runtime_stats=None, inference_only=False):
     if getattr(roles, "backend", None) == "full_dense":
         from .full_checkpoint import save
         if commit is None:
             raise RuntimeError("FULL_DIMO_COMMIT_TOKEN_REQUIRED")
         return save(root, roles=roles, optimizers=optimizers, schedulers=schedulers, ema=ema,
             step=step, cursor=cursor, identity=identity, config_hash=config_hash, commit=commit,
-            sampler_state=sampler_state, loader_rng=loader_rng, inference_only=inference_only)
+            sampler_state=sampler_state, loader_rng=loader_rng, runtime_stats=runtime_stats, inference_only=inference_only)
     rng = capture_rank_rng_state()
     rank = dist.get_rank() if dist.is_initialized() else 0
     error = None
@@ -53,7 +53,7 @@ def save_checkpoint(root, *, roles, optimizers, schedulers, ema, step, cursor, i
 def load_inference(root, *, roles, expected_identity, weights="student", full=False):
     root = Path(root)
     marker = json.loads((root / "COMPLETED.json").read_text())
-    if marker.get("schema") == "full-dense-dimo-ddp-v2":
+    if marker.get("schema") in ("full-dense-dimo-ddp-v2", "full-dense-dimo-ddp-v3"):
         from .full_checkpoint import load_weights, verify
         verify(root, full=full, weights=weights, expected_identity=expected_identity)
         return load_weights(root, roles.model_for("student"), weights=weights, expected_identity=expected_identity)

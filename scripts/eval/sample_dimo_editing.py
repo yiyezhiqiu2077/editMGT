@@ -52,7 +52,7 @@ def main() -> None:
     parser.add_argument("--model-root", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--r-init", type=float, default=0.5)
+    parser.add_argument("--r-init", type=float, default=None)
     parser.add_argument("--embedding-noise-sigma", type=float, default=0.3)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=0)
@@ -78,25 +78,31 @@ def main() -> None:
         upstream_commit=DIMO_UPSTREAM_COMMIT,
     )
     marker = Path(args.student_checkpoint) / "COMPLETED.json"
-    full_dense = marker.is_file() and json.loads(marker.read_text()).get("schema") == "full-dense-dimo-ddp-v2"
+    full_dense = marker.is_file() and json.loads(marker.read_text()).get("schema") in ("full-dense-dimo-ddp-v2", "full-dense-dimo-ddp-v3")
     if full_dense:
         from src.dimo.inference import load_dense_inference_role
-        roles, _ = load_dense_inference_role(components.transformer, args.student_checkpoint,
+        roles, checkpoint_identity = load_dense_inference_role(components.transformer, args.student_checkpoint,
             weights="student" if args.weights == "student" else "ema", teacher_bundle=teacher_bundle)
     else:
         roles = initialize_teacher_roles(
             components.transformer, args.teacher_checkpoint, model_roles=DIMO_MODEL_ROLES_V11, teacher_backend=args.teacher_backend
         )
+    from src.dimo.evaluation import checkpoint_r_init
     if full_dense:
-        pass
+        args.r_init = checkpoint_r_init(checkpoint_identity, args.r_init)
+        if checkpoint_identity.get("recipe") == "dimo-v2" and (args.cfg_scale != 1. or args.embedding_noise_sigma != .3
+                or args.temperature != 1. or args.top_k != 0 or args.top_p != 0.):
+            raise RuntimeError("DIMO_V2_SINGLE_IMAGE_INFERENCE_RECIPE_MISMATCH")
     elif (Path(args.student_checkpoint) / "inference_identity.json").is_file():
         from src.dimo.dense_distributed_checkpoint import load_inference
         recorded = json.loads((Path(args.student_checkpoint) / "inference_identity.json").read_text())
         expected = {"teacher_bundle_fingerprint": teacher_bundle, "inference_fingerprint": inference_identity,
                     "upstream_commit": DIMO_UPSTREAM_COMMIT, "world_size": recorded["world_size"]}
         load_inference(args.student_checkpoint, roles=roles, expected_identity=expected, weights=args.weights)
+        args.r_init = checkpoint_r_init(recorded, args.r_init)
     else:
         state = torch.load(Path(args.student_checkpoint) / "training_state.pt", map_location="cpu")
+        args.r_init = checkpoint_r_init(state, args.r_init)
         validate_inference_checkpoint(state, expected_teacher_bundle_fingerprint=teacher_bundle,
             expected_inference_fingerprint=inference_identity, expected_upstream_commit=DIMO_UPSTREAM_COMMIT)
         if args.weights == "student":

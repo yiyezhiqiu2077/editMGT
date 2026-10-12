@@ -16,7 +16,7 @@ from src.explicit_region.dense_evaluation import assert_matching_predictions, co
 from src.explicit_region.modeling import load_released_components
 from src.dimo.contracts import released_base_model_identity, teacher_bundle_fingerprint
 from src.dimo.inference import load_dense_inference_role
-from src.dimo.evaluation import generate_one_step_evaluation, evaluation_r_init
+from src.dimo.evaluation import generate_one_step_evaluation, evaluation_r_init, teacher_formal_requirement
 from scripts.eval.formal_eval import evaluate
 
 
@@ -29,6 +29,10 @@ def main():
     p.add_argument("--diagnostic-count", type=int)
     a = p.parse_args()
     plan = load_config(a.plan)
+    if plan.get("schema") == "dimo-v2-dev128-v1":
+        from src.dimo.native_evaluation import evaluate_native_plan
+        return evaluate_native_plan(plan, Path(a.run_root), steps=a.steps, device=a.device,
+                                    diagnostic_count=a.diagnostic_count)
     config = load_config(plan["inference_config"])
     if a.diagnostic_count:
         config["generation_seeds"] = [0]
@@ -79,7 +83,7 @@ def main():
             components = load_released_components(plan["model_root"], torch_dtype=torch.bfloat16,
                 transformer_dtype=torch.float32, vq_dtype=torch.float32)
             bundle = teacher_bundle_fingerprint(plan["teacher_checkpoint"],
-                base_model_identity=released_base_model_identity(components.identity), formal=True)
+                base_model_identity=released_base_model_identity(components.identity), formal=teacher_formal_requirement(run_identity))
             roles, identity = load_dense_inference_role(components.transformer, checkpoint, weights=weights, teacher_bundle=bundle)
             if identity != run_identity:
                 raise RuntimeError("DIMO_EVALUATION_RUN_CHECKPOINT_MISMATCH")

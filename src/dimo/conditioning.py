@@ -75,4 +75,5 @@ def predict_role_logits(
         roles.forward_role(role, training=training, **combined_common, **combined_prompt), combined_shape
     )
     unconditional_logits, conditional_logits = combined_logits.chunk(2, dim=0)
-    return unconditional_logits + cfg_scale * (conditional_logits - unconditional_logits)
+    uncond, cond = unconditional_logits.float(), conditional_logits.float()
+    return uncond + cfg_scale * (cond - uncond)

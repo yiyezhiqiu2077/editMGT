@@ -14,11 +14,12 @@ def auxiliary_loss(
     student_logits: torch.Tensor | None = None,
     soft_target_weight: float = 0.0,
     temperature: float = 1.0,
+    label_smoothing: float = 0.0,
 ) -> torch.Tensor:
     """Per-sample normalized hard CE, with a reserved optional soft target."""
     if auxiliary_logits.shape[:-1] != student_tokens.shape or pseudo_mask.shape != student_tokens.shape:
         raise ValueError("auxiliary logits, student tokens, and pseudo mask have incompatible shapes")
-    if not 0 <= soft_target_weight <= 1 or temperature <= 0:
+    if not 0 <= soft_target_weight <= 1 or not 0 <= label_smoothing <= 1 or temperature <= 0:
         raise ValueError("invalid soft-target weight or temperature")
     mask = pseudo_mask.bool().flatten(1)
     counts = mask.sum(1)
@@ -26,7 +27,8 @@ def auxiliary_loss(
         raise ValueError("each sample must contain pseudo-masked auxiliary targets")
     vocab = auxiliary_logits.shape[-1]
     hard = F.cross_entropy(
-        auxiliary_logits.reshape(-1, vocab), student_tokens.detach().reshape(-1), reduction="none"
+        auxiliary_logits.reshape(-1, vocab), student_tokens.detach().reshape(-1), reduction="none",
+        label_smoothing=label_smoothing
     ).reshape(student_tokens.shape[0], -1)
     hard = (hard * mask).sum(1) / counts
     if soft_target_weight == 0:

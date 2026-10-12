@@ -10,6 +10,9 @@ import torch
 def validate_full_config(config, *, synthetic=False):
     from src.explicit_region.magicbrush_experiment import is_magicbrush, validate_magicbrush_budget
     from .mixed_experiment import is_mixed_dimo, validate_budget
+    from .recipe import is_v2, validate_joint_recipe
+    v2 = is_v2(config)
+    validate_joint_recipe(config)
     magic = is_magicbrush(config)
     mixed = is_mixed_dimo(config)
     if magic:
@@ -28,7 +31,7 @@ def validate_full_config(config, *, synthetic=False):
         raise RuntimeError("FULL_DIMO_EMA_RECIPE_CHANGED")
     if config["surrogate"] != {"implementation": "linear", "version": "roi-vocabulary-sum-v1"}:
         raise RuntimeError("FULL_DIMO_SURROGATE_NOT_FROZEN")
-    if (config["batch_per_gpu"], config["gradient_accumulation"], config["epochs"]) != (1, 1, 5 if mixed else 10 if magic else 1):
+    if (config["batch_per_gpu"], config["gradient_accumulation"], config["epochs"]) != (1, 1, config["epochs"] if v2 and synthetic else 5 if mixed else 10 if magic else 1):
         raise RuntimeError("FULL_DIMO_BATCH_RECIPE_CHANGED")
     if not synthetic and not magic and not mixed and (config["max_optimizer_steps"], config["distributed"]["world_size"], config["data"]["expected_rows"], config["formal_ready"]) != (25000, 8, 200000, True):
         raise RuntimeError("FULL_DIMO_FORMAL_HORIZON_OR_DATA_CHANGED")
@@ -46,11 +49,12 @@ def validate_full_config(config, *, synthetic=False):
     if config["pseudo_forward"] != {"teacher_ratio_mode": "cosine", "auxiliary_ratio_mode": "cosine", "ratio_min": .02, "ratio_max": .98}:
         raise RuntimeError("FULL_DIMO_PSEUDO_MASK_RECIPE_CHANGED")
     for key in ("teacher_temperature", "auxiliary_temperature", "teacher_cfg", "auxiliary_cfg", "student_cfg", "auxiliary_train_cfg"):
-        if config["distillation"].get(key, 1.) != 1.:
+        expected_scale = 4. if v2 and key == "teacher_cfg" else 1.
+        if config["distillation"].get(key, 1.) != expected_scale:
             raise RuntimeError(f"FULL_DIMO_DISTRIBUTION_RECIPE_CHANGED: {key}")
-    if config["auxiliary"]["soft_target_weight"] != 0 or config["auxiliary"]["batch_policy"] != "same_batch" or config["gt_anchor"]["weight"] != 0:
+    if config["auxiliary"]["soft_target_weight"] != 0 or config["auxiliary"]["batch_policy"] != ("fresh_batch" if v2 else "same_batch") or config["gt_anchor"]["weight"] != 0:
         raise RuntimeError("FULL_DIMO_TARGET_RECIPE_CHANGED")
-    if not synthetic and config["embedding_perturbation"] != {"enabled": True, "sigma": .3, "scope": "target_roi_only"}:
+    if (not synthetic or v2) and config["embedding_perturbation"] != {"enabled": True, "sigma": .3, "scope": "target_roi_only"}:
         raise RuntimeError("FULL_DIMO_EMBEDDING_NOISE_RECIPE_CHANGED")
 
 
@@ -120,14 +124,16 @@ class MemoryRecorder:
             handle.write(json.dumps(row) + "\n")
 
 
-def disk_budget(parameters, config, output, *, stop_at=None):
+def disk_budget(parameters, config, output, *, stop_at=None, trainable_parameters=None):
     from .mixed_experiment import is_mixed_dimo
     if is_mixed_dimo(config):
         from .mixed_storage import segment_budget
         return segment_budget(parameters, config, output,
-                              config['max_optimizer_steps'] if stop_at is None else stop_at)
+                              config['max_optimizer_steps'] if stop_at is None else stop_at,
+                              trainable_parameters=trainable_parameters)
     # Two FP32 roles+EMA (12P bytes), two AdamW pairs (16P bytes).
-    resume_bytes = 28 * parameters
+    trainable = parameters if trainable_parameters is None else trainable_parameters
+    resume_bytes = 12 * parameters + 16 * trainable
     inference_bytes = 8 * parameters
     required = (len(config["resume_checkpoint_steps"]) + 1) * resume_bytes + len(config["evaluation_steps"]) * inference_bytes
     required = int(required * 1.15)

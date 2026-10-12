@@ -44,30 +44,43 @@ class TrainableEMA:
     def load_state_dict(self, state: dict[str, object]) -> None:
         if set(state["shadow"]) != set(self.shadow):
             raise RuntimeError("EMA state parameter identity mismatch")
+        for name, value in state["shadow"].items():
+            if (not isinstance(value, torch.Tensor) or value.shape != self.shadow[name].shape
+                    or value.dtype != torch.float32 or not torch.isfinite(value).all()):
+                raise RuntimeError(f"EMA state tensor identity mismatch: {name}")
         self.decay = float(state["decay"])
         self.update_count = int(state.get("update_count", 0))
         self.shadow = {name: value.detach().to(self.device, torch.float32).clone() for name, value in state["shadow"].items()}
 
 
 @torch.no_grad()
-def apply_ema_to_student_role(roles, ema_state: dict[str, object]) -> None:
+def apply_ema_to_student_role(roles, ema_state: dict[str, object], *, expected_trainable_names=None) -> None:
     """Strictly apply an FP32 EMA shadow to the student's live parameters."""
     if not isinstance(ema_state, dict) or "shadow" not in ema_state:
         raise RuntimeError("invalid student EMA state")
     current = dict(roles.role_named_parameters("student"))
     shadow = ema_state["shadow"]
-    if not isinstance(shadow, dict) or set(shadow) != set(current):
+    expected = ({name for name, parameter in current.items() if parameter.requires_grad}
+                if expected_trainable_names is None else set(expected_trainable_names))
+    if expected_trainable_names is None and getattr(roles, "backend", None) != "full_dense":
+        expected = set(current)
+    live_trainable = {name for name, parameter in current.items() if parameter.requires_grad}
+    if getattr(roles, "backend", None) == "full_dense" and live_trainable and expected != live_trainable:
+        raise RuntimeError("EMA training parameter identity mismatch")
+    if not expected <= set(current) or not isinstance(shadow, dict) or set(shadow) != expected:
         raise RuntimeError("EMA state parameter identity mismatch")
-    for name, parameter in current.items():
-        value = shadow[name]
+    for name, value in shadow.items():
+        parameter = current[name]
         if not isinstance(value, torch.Tensor):
             raise RuntimeError(f"EMA tensor is invalid: {name}")
         if value.shape != parameter.shape:
             raise RuntimeError(f"EMA parameter shape mismatch: {name}")
         if value.dtype != torch.float32:
             raise RuntimeError(f"EMA parameter dtype must be float32: {name}")
+        if not torch.isfinite(value).all():
+            raise RuntimeError(f"EMA parameter is nonfinite: {name}")
         if not torch.is_floating_point(parameter):
             raise RuntimeError(f"student parameter dtype is not floating: {name}")
-    for name, parameter in current.items():
-        value = shadow[name]
+    for name, value in shadow.items():
+        parameter = current[name]
         parameter.copy_(value.to(device=parameter.device, dtype=parameter.dtype))

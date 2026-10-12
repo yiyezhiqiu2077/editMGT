@@ -190,8 +190,8 @@ def audit_role_optimizers(
     auxiliary_optimizer: torch.optim.Optimizer,
     output_path: str | Path | None = None,
 ) -> dict[str, object]:
-    student_expected = {id(p) for _, p in roles.role_named_parameters("student")}
-    auxiliary_expected = {id(p) for _, p in roles.role_named_parameters("auxiliary")}
+    student_expected = {id(p) for _, p in roles.role_named_parameters("student") if getattr(roles, "backend", None) != "full_dense" or p.requires_grad}
+    auxiliary_expected = {id(p) for _, p in roles.role_named_parameters("auxiliary") if getattr(roles, "backend", None) != "full_dense" or p.requires_grad}
     student_actual = {id(p) for group in student_optimizer.param_groups for p in group["params"]}
     auxiliary_actual = {id(p) for group in auxiliary_optimizer.param_groups for p in group["params"]}
     if student_actual != student_expected or auxiliary_actual != auxiliary_expected:
@@ -206,12 +206,24 @@ def audit_role_optimizers(
         raise RuntimeError("teacher role must be frozen")
     if getattr(roles, "backend", None) == "full_dense":
         roles.audit_storage()
-        if any(not p.requires_grad for role in ("student", "auxiliary") for _, p in roles.role_named_parameters(role)):
-            raise RuntimeError("FULL_DENSE_TRAINABLE_COVERAGE_INCOMPLETE")
+        policy = getattr(roles, "freeze_policy", {"embed": False, "mlm_layer": False})
+        for role in ("student", "auxiliary"):
+            for name, p in roles.role_named_parameters(role):
+                frozen = any(value and name.startswith(module + ".") for module, value in policy.items())
+                if p.requires_grad == frozen or (frozen and p.grad is not None):
+                    raise RuntimeError("FULL_DENSE_TRAINABLE_COVERAGE_INCOMPLETE")
         report = {"backend": "full_dense", "teacher_trainable": 0,
-            "student_trainable": sum(p.numel() for _, p in roles.role_named_parameters("student")),
-            "auxiliary_trainable": sum(p.numel() for _, p in roles.role_named_parameters("auxiliary")),
+            "student_trainable": sum(p.numel() for _, p in roles.role_named_parameters("student") if p.requires_grad),
+            "auxiliary_trainable": sum(p.numel() for _, p in roles.role_named_parameters("auxiliary") if p.requires_grad),
             "optimizer_overlap": 0, "base_trainable": 0}
+        for role in ("student", "auxiliary"):
+            named = roles.role_named_parameters(role)
+            total = sum(p.numel() for _, p in named)
+            frozen = {n: p.numel() for n, p in named if not p.requires_grad}
+            report.update({f"{role}_total": total, f"{role}_frozen": sum(frozen.values()),
+                           f"{role}_trainable_ratio": report[f"{role}_trainable"] / total,
+                           f"{role}_frozen_parameters": frozen,
+                           f"{role}_optimizer_parameter_names": [n for n, p in named if p.requires_grad]})
         if output_path is not None:
             Path(output_path).write_text(json.dumps(report, indent=2) + "\n")
         return report

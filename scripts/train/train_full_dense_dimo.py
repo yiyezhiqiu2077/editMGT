@@ -31,6 +31,8 @@ from src.dimo.roles import audit_role_optimizers
 from src.dimo.runtime import validate_full_config, validate_output, gpu_admission, MemoryRecorder, disk_budget, append_committed_log, prepare_resume_output
 from src.dimo.transaction import StepCommit, collective_status, sampled_rank_state, set_control_group
 from src.dimo.step import complete_dimo_step
+from src.dimo.recipe import is_v2, batches_per_step, recipe_identity
+from src.dimo.fresh_batch import PairedEpochLoader, verify_batch_pair
 from src.explicit_region.magicbrush_experiment import is_magicbrush, verify_magicbrush_ready
 from src.dimo.mixed_experiment import is_mixed_dimo, verify_ready as verify_mixed_dimo_ready, verify_teacher_record
 
@@ -42,13 +44,15 @@ def main():
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--output-dir")
     parser.add_argument("--stop-at-global-step", type=int)
-    parser.add_argument("--inject-failure", choices=("student_optimizer", "auxiliary_optimizer", "ema_during", "ema_complete", "before_commit"))
+    parser.add_argument("--inject-failure", choices=("student_optimizer", "fresh_student_forward", "auxiliary_optimizer", "ema_during", "ema_complete", "before_commit"))
     parser.add_argument("--failure-rank", type=int, default=0)
     args = parser.parse_args()
     config = load_config(args.config)
     if args.output_dir:
         config["output_dir"] = args.output_dir
     validate_full_config(config, synthetic=args.synthetic)
+    v2 = is_v2(config)
+    runtime_stats = {"student_clip_count": 0}
     if args.inject_failure and not args.synthetic:
         raise RuntimeError("FAULT_INJECTION_SYNTHETIC_ONLY")
     world, rank, local = (int(os.environ.get(name, default)) for name, default in
@@ -86,16 +90,18 @@ def main():
     try:
         if not args.synthetic:
             admission = gpu_admission(magicbrush=exploratory,
-                allow_other_jobs=exploratory and os.environ.get('EDITMGT_ALLOW_SHARED_A800') == '1')
+                allow_other_jobs=exploratory and not v2 and os.environ.get('EDITMGT_ALLOW_SHARED_A800') == '1')
             write_json(output / f"gpu_admission_rank{rank}.json", admission)
         if args.synthetic:
-            from src.dimo.synthetic import SyntheticDenseTransformer, SyntheticDataset, synthetic_batch
-            roles = DenseDiMOModelRoles(SyntheticDenseTransformer()).to(device)
+            from src.dimo.synthetic import (SyntheticDenseTransformer, SyntheticDenseTransformerV2,
+                                            SyntheticDataset, synthetic_batch, synthetic_v2_batch)
+            model = SyntheticDenseTransformerV2() if v2 else SyntheticDenseTransformer()
+            roles = DenseDiMOModelRoles(model, freeze_embed=v2, freeze_mlm_head=v2).to(device)
             dataset = SyntheticDataset(config["data"]["expected_rows"])
             bundle = {"identity": "CPU_SYNTHETIC", "formal_teacher": False}
             manifest_hash = recipe_fingerprint(dataset.rows)
             data_hash = manifest_hash
-            prepare = lambda batch: synthetic_batch(batch, dataset)
+            prepare = lambda batch: (synthetic_v2_batch if v2 else synthetic_batch)(batch, dataset)
         else:
             from src.explicit_region.modeling import load_released_components
             from src.explicit_region.fixed_dataset import FixedCorpusDataset
@@ -131,7 +137,7 @@ def main():
                 prereg = record["selection_preregistration"]
                 if prereg.get("protocol") != "full-dense-selection-v2" or prereg["train_manifest_sha256"] != manifest_hash:
                     raise RuntimeError("FULL_DIMO_TEACHER_SOURCE_GROUP_SELECTION_NOT_VERIFIED")
-            roles = initialize_dense_model_roles(components.transformer, config["teacher_checkpoint"], expected_base_identity=base).to(device)
+            roles = initialize_dense_model_roles(components.transformer, config["teacher_checkpoint"], expected_base_identity=base, model_roles=config["model_roles"]).to(device)
             freeze_modules([components.text_encoder, components.llm_encoder, components.vqvae])
             for model in (components.text_encoder, components.llm_encoder, components.vqvae):
                 model.to(device)
@@ -149,7 +155,7 @@ def main():
             roles.wrap_ddp(device)
         memory.record("roles_loaded_and_ddp_wrapped", commit.step)
         opt = config["optimizer"]
-        optimizers = [torch.optim.AdamW([p for _, p in roles.role_named_parameters(role)],
+        optimizers = [torch.optim.AdamW([p for _, p in roles.role_named_parameters(role) if p.requires_grad],
             lr=opt[f"{role}_learning_rate"], betas=tuple(opt["betas"]), weight_decay=opt["weight_decay"], foreach=False)
             for role in ("student", "auxiliary")]
         schedulers = [torch.optim.lr_scheduler.LambdaLR(o, lambda _: 1.0) for o in optimizers]
@@ -161,6 +167,10 @@ def main():
             "world_size": world, "backend": "ddp", "surrogate": config["surrogate"],
             "precision": config["component_dtypes"], "initialization": config["initialization"],
             "formal": not args.synthetic and not exploratory}
+        frozen_hashes = roles.frozen_parameter_hashes() if v2 else None
+        if v2:
+            identity.update(schema="full-dense-dimo-identity-v3", recipe="dimo-v2",
+                            recipe_contract=recipe_identity(config, roles), frozen_parameter_hashes=frozen_hashes)
         if exploratory:
             identity.update(experiment_mode=config['experiment_mode'],initialization=config['initialization'],
                             teacher_source=record['teacher_source'],selection_scope=record['selection_scope'])
@@ -178,7 +188,8 @@ def main():
             write_json(manifest_path, identity)
             write_json(output / "resolved_config.json", config)
             write_json(output / "parameter_report.json", parameter_report)
-            write_json(output / "disk_budget.json", disk_budget(parameter_report["student_trainable"], config, output, stop_at=args.stop_at_global_step))
+            write_json(output / "disk_budget.json", disk_budget(parameter_report.get("student_total", parameter_report["student_trainable"]), config, output,
+                trainable_parameters=parameter_report["student_trainable"], stop_at=args.stop_at_global_step))
         collective_status()
         generator = torch.Generator().manual_seed(config["seed"] + 10000)
         resumed = None
@@ -203,6 +214,8 @@ def main():
                 expected_identity=identity, expected_config_hash=identity["config_sha256"])
             commit = StepCommit(resumed["step"], resumed["cursor"])
             generator.set_state(resumed["loader_rng"]["current"])
+            if v2:
+                runtime_stats = resumed["runtime_stats"]
             collective_status()
             error = None
             if rank == 0:
@@ -218,7 +231,7 @@ def main():
         sampler = DeterministicEpochSampler(len(dataset), base_seed=config["seed"], epoch=resumed_epoch,
             train_manifest_sha256=manifest_hash, rank=rank, world_size=world,
             samples_consumed_in_epoch=resumed_cursor)
-        if commit.cursor != commit.step * world:
+        if commit.cursor != commit.step * world * config["batch_per_gpu"] * batches_per_step(config):
             raise RuntimeError("FULL_DIMO_RESUME_CURSOR_STEP_MISMATCH")
         if resumed and resumed["sampler_state"] != sampler.state_dict():
             raise RuntimeError("FULL_DIMO_RESUME_SAMPLER_IDENTITY_MISMATCH")
@@ -240,17 +253,27 @@ def main():
             save_checkpoint(folder, roles=roles, optimizers=optimizers, schedulers=schedulers, ema=ema,
                 step=commit.step, cursor=commit.cursor, identity=identity, config_hash=identity["config_sha256"],
                 commit=commit, sampler_state=sampler.state_dict(),
-                loader_rng={"current": generator.get_state(), "epoch_start": loader.epoch_start_rng}, inference_only=inference_only)
+                loader_rng={"current": generator.get_state(), "epoch_start": loader.epoch_start_rng},
+                runtime_stats=runtime_stats if v2 else None, inference_only=inference_only)
             memory.record("checkpoint_save", commit.step)
         if commit.step == 0:
             checkpoint(inference_only=True)
         def failure(phase):
             if phase == args.inject_failure and rank == args.failure_rank:
                 raise RuntimeError(f"INJECTED_FAILURE_{phase}_RANK_{rank}")
-        for batch in loader:
-            if commit.step >= stop:
-                break
-            prepared = prepare(batch)
+        from itertools import islice
+        iteration = PairedEpochLoader(loader) if v2 else loader
+        for batch in islice(iteration, stop - commit.step):
+            if v2:
+                error, prepared, prepared_b = None, None, None
+                try:
+                    prepared, prepared_b = prepare(batch[0]), prepare(batch[1])
+                except Exception as exc:
+                    error = f"DIMO_FRESH_BATCH_PREPARATION: {exc}"
+                collective_status(error)
+                consumed = verify_batch_pair(prepared, prepared_b, dataset=dataset, sampler=sampler, cursor=commit.cursor)
+            else:
+                prepared, prepared_b, consumed = prepare(batch), None, world
             if commit.step == 0:
                 kwargs = dict(prepared["model_kwargs"], **prepared["prompt_condition"]["conditional"],
                     hidden_states=prepared["source_tokens"], reference_image_hidden_states=prepared["source_tokens"],
@@ -259,7 +282,7 @@ def main():
                 write_json(output / f"initial_parity_rank{rank}.json", parity)
             epoch_cursor = commit.cursor - sampler.epoch * len(dataset)
             expected_index = sampler.permutation[epoch_cursor + rank]
-            if prepared["sample_uids"] != [dataset.rows[expected_index]["sample_uid"]]:
+            if not v2 and prepared["sample_uids"] != [dataset.rows[expected_index]["sample_uid"]]:
                 raise RuntimeError("FULL_DIMO_SAMPLER_SEQUENCE_MISMATCH")
             started = time.perf_counter()
             def stage(phase):
@@ -278,6 +301,8 @@ def main():
                     for role in ('student','auxiliary'):
                         check=assert_rank_parameters(roles.model_for(role))
                         write_json(output/f'full_rank_{role}_step{next_step}_rank{rank}.json',check)
+                if v2 and next_step in config.get("full_update_diagnostic_steps", []):
+                    roles.assert_frozen_unchanged(frozen_hashes)
                 collective_status()
             diagnostics, _ = commit.execute(lambda: complete_dimo_step(roles, **prepared,
                 student_optimizer=optimizers[0], auxiliary_optimizer=optimizers[1],
@@ -285,10 +310,20 @@ def main():
                 base_seed=config["seed"], epoch=sampler.epoch, committed_dimo_step=commit.step,
                 mask_token_id=5 if args.synthetic else roles.base_model.config.vocab_size - 1,
                 codebook_size=5 if args.synthetic else roles.base_model.config.codebook_size,
-                config=config, phase_callback=stage, failure_injector=failure if args.inject_failure else None),
-                samples=world, finalize=finalize, failure_injector=failure if args.inject_failure else None)
+                config=config, fresh_batch=prepared_b, phase_callback=stage, failure_injector=failure if args.inject_failure else None),
+                samples=consumed, finalize=finalize, failure_injector=failure if args.inject_failure else None)
             sampler.samples_consumed_in_epoch = commit.cursor - sampler.epoch * len(dataset)
-            if exploratory:
+            if v2:
+                runtime_stats["student_clip_count"] += int(diagnostics["student_clip_triggered"])
+                diagnostics.update(student_clip_fraction=runtime_stats["student_clip_count"] / commit.step,
+                    budget_basis="total_data_consumption", total_sample_consumptions=commit.cursor,
+                    student_update_count=commit.step, auxiliary_update_count=commit.step,
+                    student_update_sample_consumptions=commit.step * world * config["batch_per_gpu"],
+                    auxiliary_update_sample_consumptions=commit.step * world * config["batch_per_gpu"])
+                append_committed_log(output/f'trace_rank{rank}.jsonl', {'global_step': commit.step,
+                    'sample_uids_a': prepared['sample_uids'], 'sample_uids_b': prepared_b['sample_uids'],
+                    'epoch': sampler.epoch, 'global_cursor': commit.cursor})
+            elif exploratory:
                 append_committed_log(output/f'trace_rank{rank}.jsonl',{'global_step':commit.step,
                     'sample_uids':prepared['sample_uids'],'epoch':sampler.epoch,'global_cursor':commit.cursor})
             # Logging is after complete-step commit; monitor never participates.
@@ -299,6 +334,8 @@ def main():
             diagnostics.update(zip(("loss_dimo", "loss_aux", "distribution_energy", "student_grad_norm", "aux_grad_norm", "dimo_gradient_norm"), reduced.cpu().tolist()))
             if rank == 0:
                 warnings = []
+                if v2 and commit.step >= 20 and diagnostics["student_clip_fraction"] >= .95:
+                    warnings.append("STUDENT_CLIPPING_FRACTION_NEAR_100_PERCENT_THRESHOLD_UNCHANGED")
                 if commit.step % config["diagnostic_interval"] == 0:
                     if diagnostics["student_grad_norm"] < 1e-12:
                         warnings.append("SMALL_STUDENT_GRADIENT_RUN_LOGIT_DIAGNOSTICS")
@@ -322,6 +359,13 @@ def main():
             raise RuntimeError("FULL_DIMO_DATA_EXHAUSTED_BEFORE_HORIZON")
         if exploratory and stop == 0:
             checkpoint()
+        if v2:
+            roles.assert_frozen_unchanged(frozen_hashes)
+            write_json(output / f"v2_acceptance_rank{rank}.json", {"status": "PASS", "frozen_weights": "bitwise_hash_equal",
+                "recipe_contract": identity["recipe_contract"], "completed_updates_per_role": commit.step,
+                "completed_sample_consumptions": commit.cursor, "student_clip_count": runtime_stats["student_clip_count"],
+                "student_clip_fraction": runtime_stats["student_clip_count"] / max(commit.step, 1),
+                "evidence": "CPU_SYNTHETIC" if args.synthetic else "REAL_GPU"})
         write_json(output / f"runtime_acceptance_rank{rank}.json", {"status": "PASS", "step": commit.step,
             "world_size": world, "evidence": "CPU_SYNTHETIC" if args.synthetic else "REAL_GPU",
             "gpu_acceptance": "NOT_RUN_RESOURCE_UNAVAILABLE" if args.synthetic else "PASS_FOR_COMPLETED_STEPS"})

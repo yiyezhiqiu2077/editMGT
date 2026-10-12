@@ -53,7 +53,7 @@ class DenseTeacherLoRARoles(DiMOModelRoles):
             raise ValueError(role)
 
 
-def initialize_dense_model_roles(base_model, teacher_checkpoint, *, lora=None, expected_base_identity=None):
+def initialize_dense_model_roles(base_model, teacher_checkpoint, *, lora=None, expected_base_identity=None, model_roles=None):
     from peft import LoraConfig
     contract = load_dense_teacher_contract(teacher_checkpoint, expected_base_identity=expected_base_identity)
     if any("lora_" in n for n, _ in base_model.named_parameters()):
@@ -62,7 +62,9 @@ def initialize_dense_model_roles(base_model, teacher_checkpoint, *, lora=None, e
         raise RuntimeError("DENSE_TEACHER_BACKBONE_MUST_BE_FP32")
     load_dense_weights(base_model, teacher_checkpoint)
     if lora is None:
-        roles = DenseDiMOModelRoles(base_model)
+        policy = model_roles or {}
+        roles = DenseDiMOModelRoles(base_model, freeze_embed=policy.get("freeze_embed", False),
+                                    freeze_mlm_head=policy.get("freeze_mlm_head", False))
         roles.teacher_contract = contract
         return roles
     for role in ("student", "auxiliary"):
@@ -81,7 +83,7 @@ class DenseDiMOModelRoles(torch.nn.Module):
     teacher_backend = "dense"
     backend = "full_dense"
 
-    def __init__(self, teacher):
+    def __init__(self, teacher, *, freeze_embed=False, freeze_mlm_head=False):
         super().__init__()
         if any("lora_" in n or ".adapter" in n for n, _ in teacher.named_parameters()):
             raise RuntimeError("FULL_DENSE_CONTAINS_ADAPTER")
@@ -94,6 +96,15 @@ class DenseDiMOModelRoles(torch.nn.Module):
         for role, model in self.models.items():
             model.requires_grad_(role != "teacher")
             model.train(role != "teacher")
+        self.freeze_policy = {"embed": bool(freeze_embed), "mlm_layer": bool(freeze_mlm_head)}
+        for role in ("student", "auxiliary"):
+            for module, frozen in self.freeze_policy.items():
+                if frozen:
+                    if not hasattr(self.models[role], module):
+                        raise RuntimeError(f"DIMO_FREEZE_MODULE_MISSING: {module}")
+                    getattr(self.models[role], module).requires_grad_(False)
+            if not self.models[role].edit_region_embedding.requires_grad:
+                raise RuntimeError("DIMO_REGION_EMBEDDING_MUST_TRAIN")
         self.audit_storage()
 
     @property
@@ -156,6 +167,18 @@ class DenseDiMOModelRoles(torch.nn.Module):
     def load_role_state_dict(self, role, state):
         self.model_for(role).load_state_dict(state, strict=True)
 
+    def frozen_parameter_hashes(self):
+        from .distributed import tensor_digest
+        return {role: {n: tensor_digest(p) for n, p in self.role_named_parameters(role) if not p.requires_grad}
+                for role in ("student", "auxiliary")}
+
+    def assert_frozen_unchanged(self, original):
+        if self.frozen_parameter_hashes() != original:
+            raise RuntimeError("DIMO_FROZEN_PARAMETER_CHANGED")
+        if any(p.grad is not None for role in ("teacher", "student", "auxiliary")
+               for _, p in self.role_named_parameters(role) if not p.requires_grad):
+            raise RuntimeError("DIMO_FROZEN_PARAMETER_HAS_GRADIENT")
+
     def enable_gradient_checkpointing(self):
         for role in ("student", "auxiliary"):
             model = self.model_for(role)
@@ -188,7 +211,7 @@ def initialize_teacher_roles(base_model, checkpoint, *, model_roles=None, teache
         raise RuntimeError("DIMO_TEACHER_BACKEND_MISMATCH")
     if detected == "dense":
         if model_roles and model_roles.get("backend") == "full_dense":
-            return initialize_dense_model_roles(base_model, checkpoint)
+            return initialize_dense_model_roles(base_model, checkpoint, model_roles=model_roles)
         return initialize_dense_model_roles(base_model, checkpoint, lora={"rank": 64, "alpha": 64,
             "target_modules": ["to_q", "to_k", "to_v", "to_out.0", "ff.net.2", "proj_mlp", "proj_out"]})
     return initialize_shared_model_roles(base_model, checkpoint, model_roles=model_roles)

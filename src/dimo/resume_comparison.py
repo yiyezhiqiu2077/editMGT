@@ -41,6 +41,8 @@ def compare_complete_checkpoints(fresh, resumed):
     keys = ("step", "cursor", "epoch", "ema_decay", "ema_update_count", "optimizers",
             "schedulers", "rank_rng", "sampler_state", "loader_rng")
     checked = {key: state_digest(states[0][key]) == state_digest(states[1][key]) for key in keys}
+    if identities[0].get("recipe") == "dimo-v2":
+        checked["runtime_stats"] = state_digest(states[0]["runtime_stats"]) == state_digest(states[1]["runtime_stats"])
     del states
     for role in ("student", "auxiliary", "ema"):
         checked[role] = weight_digests(fresh, role) == weight_digests(resumed, role)

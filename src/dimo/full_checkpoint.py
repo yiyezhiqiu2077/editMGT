@@ -14,6 +14,58 @@ from src.explicit_region.dense_checkpoint import write_json, architecture_of
 from .transaction import collective_status
 
 SCHEMA = "full-dense-dimo-ddp-v2"
+V2_SCHEMA = "full-dense-dimo-ddp-v3"
+SCHEMAS = (SCHEMA, V2_SCHEMA)
+
+
+def checkpoint_schema(identity):
+    return V2_SCHEMA if identity.get("recipe") == "dimo-v2" else SCHEMA
+
+
+def validate_v2_state(identity, roles, ema, *, step, cursor, runtime_stats, sampler_state=None):
+    from .recipe import role_parameter_contract
+    contract = identity["recipe_contract"]
+    if (role_parameter_contract(roles) != contract["optimizer_parameters"]
+            or set(ema.shadow) != set(contract["ema_parameter_names"])
+            or cursor != step * contract["budget"]["samples_per_optimizer_step"]
+            or not 0 <= step <= contract["budget"]["optimizer_steps"]
+            or type(step) is not int or type(cursor) is not int
+            or runtime_stats is None
+            or set(runtime_stats) != {"student_clip_count"}
+            or type(runtime_stats["student_clip_count"]) is not int
+            or not 0 <= runtime_stats["student_clip_count"] <= step):
+        raise RuntimeError("DIMO_V2_CHECKPOINT_RECIPE_STATE_MISMATCH")
+    if sampler_state is not None:
+        rows = contract["budget"]["rows_per_epoch"]
+        quantum = contract["budget"]["samples_per_optimizer_step"]
+        if (sampler_state["epoch"] * rows + sampler_state["samples_consumed_in_epoch"] != cursor
+                or sampler_state["samples_consumed_in_epoch"] % quantum):
+            raise RuntimeError("DIMO_V2_CHECKPOINT_SAMPLER_CURSOR_MISMATCH")
+
+
+def validate_optimizer_states(optimizers, saved, step):
+    for optimizer, state in zip(optimizers, saved):
+        groups = state["param_groups"]
+        if len(groups) != len(optimizer.param_groups):
+            raise RuntimeError("DIMO_V2_OPTIMIZER_GROUP_MISMATCH")
+        ids, parameters = [], []
+        for group, current in zip(groups, optimizer.param_groups):
+            if ({k: v for k, v in group.items() if k != "params"}
+                    != {k: v for k, v in current.items() if k != "params"}
+                    or len(group["params"]) != len(current["params"])):
+                raise RuntimeError("DIMO_V2_OPTIMIZER_MEMBERSHIP_MISMATCH")
+            ids.extend(group["params"]); parameters.extend(current["params"])
+        if len(set(ids)) != len(ids) or set(state["state"]) != (set(ids) if step else set()):
+            raise RuntimeError("DIMO_V2_OPTIMIZER_STATE_COVERAGE_MISMATCH")
+        for index, parameter in zip(ids, parameters):
+            if not step:
+                continue
+            values = state["state"][index]
+            if (set(values) != {"step", "exp_avg", "exp_avg_sq"}
+                    or values["step"].numel() != 1 or values["step"].item() != step
+                    or any(values[k].shape != parameter.shape or values[k].dtype != torch.float32
+                           or not torch.isfinite(values[k]).all() for k in ("exp_avg", "exp_avg_sq"))):
+                raise RuntimeError("DIMO_V2_OPTIMIZER_TENSOR_MISMATCH")
 
 
 def write_weights(root, role, tensors, shard_bytes):
@@ -44,7 +96,7 @@ def write_weights(root, role, tensors, shard_bytes):
 def verify(root, *, full=False, weights="student", expected_identity=None):
     root = Path(root)
     marker = json.loads((root / "COMPLETED.json").read_text())
-    if marker.get("schema") != SCHEMA:
+    if marker.get("schema") not in SCHEMAS:
         raise RuntimeError("FULL_DIMO_CHECKPOINT_INCOMPLETE")
     ledger = marker["files"]
     if weights not in ("student", "ema", "auxiliary"):
@@ -60,6 +112,8 @@ def verify(root, *, full=False, weights="student", expected_identity=None):
         if Path(filename).name != filename or sha256_file(root / filename) != ledger.get(filename):
             raise RuntimeError("FULL_DIMO_WEIGHT_SHARD_CORRUPTED")
     identity = json.loads((root / "inference_identity.json").read_text())
+    if marker["schema"] != checkpoint_schema(identity):
+        raise RuntimeError("FULL_DIMO_CHECKPOINT_RECIPE_SCHEMA_MISMATCH")
     if expected_identity is not None and identity != expected_identity:
         raise RuntimeError("FULL_DIMO_IDENTITY_MISMATCH")
     return identity, index
@@ -85,8 +139,20 @@ def load_weights(root, model, *, weights="student", expected_identity=None):
 
 
 def save(root, *, roles, optimizers, schedulers, ema, step, cursor, identity, config_hash,
-         commit, sampler_state=None, loader_rng=None, shard_bytes=512*1024**2, inference_only=False):
+         commit, sampler_state=None, loader_rng=None, runtime_stats=None, shard_bytes=512*1024**2, inference_only=False):
     commit.require_checkpointable(step, cursor)
+    schema = checkpoint_schema(identity)
+    if schema == V2_SCHEMA:
+        error = None
+        try:
+            validate_v2_state(identity, roles, ema, step=step, cursor=cursor, runtime_stats=runtime_stats,
+                              sampler_state=sampler_state)
+            if not inference_only and sampler_state is None:
+                raise RuntimeError("DIMO_V2_CHECKPOINT_SAMPLER_MISSING")
+            roles.assert_frozen_unchanged(identity["frozen_parameter_hashes"])
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        collective_status(error)
     ema.synchronize()
     if ema.update_count != step:
         raise RuntimeError("FULL_DIMO_EMA_COMMIT_COUNT_MISMATCH")
@@ -111,9 +177,10 @@ def save(root, *, roles, optimizers, schedulers, ema, step, cursor, identity, co
             write_json(temporary / "architecture.json", architecture_of(roles.model_for("student")))
             write_json(temporary / "inference_identity.json", identity)
             if not inference_only:
-                torch.save({"schema": SCHEMA, "step": step, "cursor": cursor, "epoch": (sampler_state or {}).get('epoch',0),
+                torch.save({"schema": schema, "step": step, "cursor": cursor, "epoch": (sampler_state or {}).get('epoch',0),
                     "identity": identity, "config_hash": config_hash, "rank_rng": rng,
                     "sampler_state": sampler_state, "loader_rng": loader_rng,
+                    **({"runtime_stats": runtime_stats} if schema == V2_SCHEMA else {}),
                     "optimizers": [o.state_dict() for o in optimizers],
                     "schedulers": [s.state_dict() for s in schedulers],
                     "ema_decay": ema.decay, "ema_update_count": ema.update_count}, temporary / "training_state.pt")
@@ -121,7 +188,7 @@ def save(root, *, roles, optimizers, schedulers, ema, step, cursor, identity, co
                 with path.open("rb") as handle:
                     os.fsync(handle.fileno())
             ledger = {p.name: sha256_file(p) for p in temporary.iterdir()}
-            write_json(temporary / "COMPLETED.json", {"schema": SCHEMA, "files": ledger, "committed_step": step})
+            write_json(temporary / "COMPLETED.json", {"schema": schema, "files": ledger, "committed_step": step})
             verify(temporary, full=True, expected_identity=identity)
             os.rename(temporary, root)
             fd = os.open(root.parent, os.O_RDONLY)
@@ -137,10 +204,16 @@ def save(root, *, roles, optimizers, schedulers, ema, step, cursor, identity, co
 def load(root, *, roles, optimizers, schedulers, ema, expected_identity, expected_config_hash):
     verify(root, full=True, expected_identity=expected_identity)
     state = torch.load(str(Path(root) / "training_state.pt"), map_location="cpu", weights_only=False, mmap=True)
-    if (state.get("schema") != SCHEMA or state["identity"] != expected_identity
+    if (state.get("schema") != checkpoint_schema(expected_identity) or state["identity"] != expected_identity
             or state["config_hash"] != expected_config_hash or state["ema_update_count"] != state["step"]
             or state["ema_decay"] != ema.decay or len(state["optimizers"]) != 2 or len(state["schedulers"]) != 2):
         raise RuntimeError("FULL_DIMO_RESUME_STATE_MISMATCH")
+    if state["schema"] == V2_SCHEMA:
+        if state["sampler_state"] is None:
+            raise RuntimeError("DIMO_V2_RESUME_SAMPLER_MISSING")
+        validate_v2_state(expected_identity, roles, ema, step=state["step"], cursor=state["cursor"],
+                          runtime_stats=state.get("runtime_stats"), sampler_state=state["sampler_state"])
+        validate_optimizer_states(optimizers, state["optimizers"], state["step"])
     for role in ("student", "auxiliary"):
         load_weights(root, roles.model_for(role), weights=role, expected_identity=expected_identity)
     for optimizer, saved in zip(optimizers, state["optimizers"]):
@@ -159,5 +232,7 @@ def load(root, *, roles, optimizers, schedulers, ema, expected_identity, expecte
                     raise RuntimeError("FULL_DIMO_EMA_TENSOR_MISMATCH")
                 ema.shadow[name].copy_(value.to(ema.device))
     ema.update_count = state["ema_update_count"]
+    if state["schema"] == V2_SCHEMA:
+        roles.assert_frozen_unchanged(expected_identity["frozen_parameter_hashes"])
     restore_rank_rng_state(state["rank_rng"])
     return state

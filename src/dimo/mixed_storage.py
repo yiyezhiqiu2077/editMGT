@@ -11,7 +11,7 @@ def existing_parent(path):
     return path
 
 
-def segment_budget(parameters, config, output, stop):
+def segment_budget(parameters, config, output, stop, *, trainable_parameters=None):
     """Reserve only future writes of this invocation, separately per filesystem."""
     if not 0 <= stop <= config['max_optimizer_steps']:
         raise RuntimeError('MIXED_DIMO_INVALID_STOP_STEP')
@@ -19,7 +19,9 @@ def segment_budget(parameters, config, output, stop):
     resume = {step for step in config['resume_checkpoint_steps'] if step <= stop} | {stop}
     inference = {0} | {step for step in config['evaluation_steps'] if step <= stop}
     volumes = defaultdict(lambda: {'retained_bytes': 0, 'atomic_bytes': 0, 'paths': []})
-    for kind, steps, factor in [('checkpoints', resume, 28), ('inference', inference, 8)]:
+    trainable = parameters if trainable_parameters is None else trainable_parameters
+    resume_factor = 12 + 16 * trainable / parameters
+    for kind, steps, factor in [('checkpoints', resume, resume_factor), ('inference', inference, 8)]:
         parent = existing_parent(output / kind); device = os.stat(parent).st_dev
         record = volumes[device]; record['path'] = str(parent)
         missing = [step for step in steps if not (output / kind / f'checkpoint-{step}/COMPLETED.json').is_file()]

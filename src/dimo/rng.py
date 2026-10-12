@@ -9,7 +9,7 @@ from collections.abc import Sequence
 import torch
 
 
-RNG_NAMESPACES = (
+LEGACY_RNG_NAMESPACES = (
     "dimo-init-mask",
     "dimo-init-token",
     "dimo-student-sample",
@@ -17,6 +17,12 @@ RNG_NAMESPACES = (
     "dimo-aux-query-mask",
     "dimo-embedding-noise",
 )
+FRESH_RNG_NAMESPACES = (
+    "dimo-fresh-init-mask", "dimo-fresh-init-token", "dimo-fresh-student-sample",
+    "dimo-fresh-embedding-noise", "dimo-fresh-aux-query-mask",
+)
+
+RNG_NAMESPACES = LEGACY_RNG_NAMESPACES + FRESH_RNG_NAMESPACES
 
 
 def stable_seed(
@@ -83,4 +89,4 @@ def normal_noise_per_sample(
 
 
 def stream_identity() -> dict[str, object]:
-    return {"schema": "dimo-stateless-per-sample-v1", "namespaces": list(RNG_NAMESPACES)}
+    return {"schema": "dimo-stateless-per-sample-v1", "namespaces": list(LEGACY_RNG_NAMESPACES)}

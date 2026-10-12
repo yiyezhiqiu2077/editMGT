@@ -1,0 +1,25 @@
+extends: full_dense_local_smoke.yaml
+recipe: dimo-v2
+experiment: CPU-SYNTHETIC-DiMO-v2-Joint
+budget_basis: total_data_consumption
+model_roles:
+  freeze_embed: true
+  freeze_mlm_head: true
+optimizer:
+  student_max_grad_norm: 10.0
+  horizon_steps: 12
+auxiliary:
+  batch_policy: fresh_batch
+  label_smoothing: 0.1
+distillation:
+  teacher_cfg: 4.0
+  student_cfg: 1.0
+  auxiliary_train_cfg: 1.0
+embedding_perturbation: {enabled: true, sigma: 0.3, scope: target_roi_only}
+epochs: 3
+data: {expected_rows: 16}
+max_optimizer_steps: 12
+resume_checkpoint_steps: [1, 4, 5, 12]
+evaluation_steps: [0, 12]
+full_update_diagnostic_steps: [1, 12]
+output_dir: runs/dimo_v2_cpu_smoke

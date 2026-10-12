@@ -25,6 +25,35 @@ def evaluation_r_init(config, training_initialization=None):
     return ratio
 
 
+def checkpoint_r_init(identity, explicit=None):
+    """A missing identity is never permission to guess an initialization."""
+    initialization = identity.get("initialization")
+    if initialization is None and identity.get("recipe_contract"):
+        initialization = {"mask_ratio": identity["recipe_contract"]["inference"]["r_init"]}
+    if initialization is None:
+        if explicit is None:
+            raise RuntimeError("DIMO_CHECKPOINT_R_INIT_UNRECORDED_PASS_EXPLICIT_VALUE")
+        ratio = float(explicit)
+    else:
+        ratio = float(initialization["mask_ratio"])
+        if explicit is not None and float(explicit) != ratio:
+            raise RuntimeError("DIMO_CHECKPOINT_R_INIT_OVERRIDE_MISMATCH")
+    if not 0 <= ratio <= 1:
+        raise RuntimeError("DIMO_CHECKPOINT_R_INIT_OUT_OF_RANGE")
+    return ratio
+
+
+def teacher_formal_requirement(identity):
+    if identity.get("formal") is True:
+        return True
+    if (identity.get("formal") is False and identity.get("experiment_mode") in
+            ("magicbrush_exploratory", "mixed20k_last_sft_dimo")
+            and identity.get("selection_scope") == identity["experiment_mode"]
+            and identity.get("teacher_bundle_fingerprint", {}).get("formal_teacher") is False):
+        return False
+    raise RuntimeError("DIMO_EVALUATION_UNSUPPORTED_TEACHER_EXPERIMENT_IDENTITY")
+
+
 @torch.inference_mode()
 def generate_one_step_evaluation(components, roles, *, manifest, canonical_root, dataset_name,
         config, output_dir, group_contract, device="cuda", count=None):

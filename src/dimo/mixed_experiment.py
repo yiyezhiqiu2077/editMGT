@@ -27,13 +27,17 @@ def is_mixed_dimo(config):
 
 
 def validate_budget(config):
+    from .recipe import is_v2
+    v2 = is_v2(config)
+    horizon = 12500 if v2 else 25000
+    saves = [2500, 7500, 12500] if v2 else [5000, 15000, 25000]
     if (not is_mixed_dimo(config) or config['formal_ready'] is not False
             or (config['distributed']['world_size'], config['epochs'], config['batch_per_gpu'],
                 config['gradient_accumulation'], config['max_optimizer_steps'], config['optimizer']['horizon_steps'],
                 config['data']['expected_rows'], config['data']['name']) !=
-                (4, 5, 1, 1, 25000, 25000, ROWS, 'fixed_mixed20k_total')
-            or config['resume_checkpoint_steps'] != [5000, 15000, 25000]
-            or config['evaluation_steps'] != [0, 5000, 15000, 25000]):
+                (4, 5, 1, 1, horizon, horizon, ROWS, 'fixed_mixed20k_total')
+            or config['resume_checkpoint_steps'] != saves
+            or config['evaluation_steps'] != [0, *saves]):
         raise RuntimeError('MIXED_DIMO_REGISTERED_5_EPOCH_BUDGET_CHANGED')
 
 

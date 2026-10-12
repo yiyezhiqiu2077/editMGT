@@ -1,0 +1,33 @@
+extends: full_dense_mixed20k_4a800_5epoch.yaml
+recipe: dimo-v2
+experiment: Full-DenseDiMO-v2-Mixed20K-UserSFT-Epoch3-4A800-5DataEpoch
+budget_basis: total_data_consumption
+# The current selected SFT teacher is epoch 3. This is a fresh initialization,
+# never a resume of the old DiMO optimizer/EMA state.
+selected_sft_step: 3750
+sft_final_checkpoint: ${MIXED_EXPERIMENT_ROOT}/sft/train/checkpoint-3750
+user_transition_record: ${MIXED_EXPERIMENT_ROOT}/USER_SELECTED_SFT_DIMO.json
+model_roles:
+  freeze_embed: true
+  freeze_mlm_head: true
+optimizer:
+  student_max_grad_norm: 10.0
+  horizon_steps: 12500
+auxiliary:
+  batch_policy: fresh_batch
+  updates_per_student: 1
+  label_smoothing: 0.1
+  soft_target_weight: 0.0
+distillation:
+  teacher_cfg: 4.0
+  student_cfg: 1.0
+  auxiliary_cfg: 1.0
+  auxiliary_train_cfg: 1.0
+epochs: 5
+max_optimizer_steps: 12500
+resume_checkpoint_steps: [2500, 7500, 12500]
+evaluation_steps: [0, 2500, 7500, 12500]
+full_update_diagnostic_steps: [1, 20, 2500, 7500, 12500]
+output_dir: ${DIMO_V2_OUTPUT_ROOT}
+evaluation:
+  plan: ${DIMO_V2_DEV_PLAN}
