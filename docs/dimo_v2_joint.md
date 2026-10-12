@@ -126,10 +126,14 @@ GPU 20-step smoke 入口如下（应等原四卡任务释放资源后使用）�
 cd /data02/zhangyuyang/code/editMGT-dimo-v2
 /data02/zhangyuyang/code/editMGT/.venv/bin/python scripts/train/run_dimo_v2.py \
   --config /data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/resolved_mixed20k_save2000.yaml \
-  --mode smoke --output-dir /data/zhangyuyang/editmgt_dimo_v2_20261013/gpu_smoke
+  --mode smoke --output-dir /data/zhangyuyang/editmgt_dimo_v2_20261013/gpu_smoke \
+  --inference-output-dir /data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/gpu_smoke_inference
 ```
 
 入口在启动 torchrun 前只读检查 GPU 占用和磁盘预算；禁止占用已有任务的 GPU。
+`--inference-output-dir` 将新 Raw/EMA 导出通过符号链接放到独立输出目录，预算按实际
+文件系统分别校验；完整恢复 checkpoint 保留在原 output 的 checkpoints 中。
+该参数只影响存储位置，不改变训练配方，不覆盖已有权重。
 smoke 必须完成 20 个完整 step（160 sample consumptions）、完整 checkpoint 校验、
 checkpoint 重载、Raw/EMA 单图推理及 frozen-weight 审计，才能产生 `GPU_SMOKE_PASS.json`。
 自然梯度不触发裁剪可以通过 smoke；人工构造大梯度的单测负责验证裁剪行为。

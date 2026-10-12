@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.dimo.recipe import is_v2
-from src.dimo.runtime import validate_full_config, gpu_admission, disk_budget
+from src.dimo.runtime import validate_full_config, validate_output, gpu_admission, disk_budget
 from src.explicit_region.checkpoint import recipe_fingerprint
 from src.explicit_region.config import load_config
 from src.explicit_region.contracts import sha256_file
@@ -47,11 +47,31 @@ def validate_singleton_metadata(path):
         raise RuntimeError("DIMO_V2_SMOKE_SINGLE_IMAGE_INFERENCE_FAILURE")
 
 
+def prepare_inference_output(output, inference_output, *, resume=False):
+    """Route full Raw/EMA exports to a separately budgeted filesystem."""
+    output, inference_output = Path(output), Path(inference_output).resolve()
+    if (inference_output == output.resolve() or output.resolve() in inference_output.parents
+            or inference_output in output.resolve().parents):
+        raise RuntimeError("DIMO_V2_INFERENCE_OUTPUT_MUST_BE_SEPARATE")
+    link = output / "inference"
+    if link.is_symlink():
+        if link.resolve() != inference_output:
+            raise RuntimeError("DIMO_V2_INFERENCE_OUTPUT_CHANGED")
+        return
+    if link.exists() or (inference_output.exists() and (not inference_output.is_dir()
+            or (any(inference_output.iterdir()) and not resume))):
+        raise RuntimeError("DIMO_V2_INFERENCE_OUTPUT_EXISTS")
+    inference_output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(inference_output, target_is_directory=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/dimo/dimo_v2_mixed20k.yaml")
     parser.add_argument("--mode", choices=("smoke", "train"), required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--inference-output-dir", type=Path)
     parser.add_argument("--smoke-proof", type=Path)
     parser.add_argument("--confirm-long-run", action="store_true")
     parser.add_argument("--resume", type=Path)
@@ -75,10 +95,18 @@ def main():
                 raise RuntimeError("DIMO_V2_GPU_SMOKE_EVIDENCE_CHANGED")
         if output == proof_root.resolve():
             raise RuntimeError("DIMO_V2_TRAIN_MUST_USE_SEPARATE_SMOKE_OUTPUT")
-    if output.exists() and any(output.iterdir()) and args.resume is None:
+    prepared_only = (args.inference_output_dir is not None and output.is_dir()
+        and list(output.iterdir()) == [output / "inference"] and (output / "inference").is_symlink()
+        and (output / "inference").resolve() == args.inference_output_dir.resolve()
+        and not any((output / "inference").iterdir()))
+    if output.exists() and any(output.iterdir()) and args.resume is None and not prepared_only:
         raise RuntimeError("DIMO_V2_OUTPUT_EXISTS_USE_EXPLICIT_RESUME")
     # This read-only check happens before torchrun creates any GPU contexts.
     gpu_admission(magicbrush=True, allow_other_jobs=False)
+    if args.inference_output_dir:
+        validate_output(config | {"output_dir": str(output)})
+        validate_output(config | {"output_dir": str(args.inference_output_dir)})
+        prepare_inference_output(output, args.inference_output_dir, resume=args.resume is not None)
     from safetensors import safe_open
     import math
     teacher = Path(config["teacher_checkpoint"])

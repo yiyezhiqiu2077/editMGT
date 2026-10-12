@@ -77,3 +77,21 @@ def test_busy_gpu_refuses_before_launch_or_output_creation(tmp_path, monkeypatch
     with pytest.raises(RuntimeError, match="DO_NOT_PREEMPT"):
         runner.main()
     assert not (tmp_path / "smoke").exists()
+
+
+def test_separate_inference_output_links_without_overwriting_existing_weights(tmp_path):
+    output, inference = tmp_path / "smoke", tmp_path / "exports"
+    runner.prepare_inference_output(output, inference)
+    assert (output / "inference").is_symlink() and (output / "inference").resolve() == inference
+    runner.prepare_inference_output(output, inference)
+    with pytest.raises(RuntimeError, match="CHANGED"):
+        runner.prepare_inference_output(output, tmp_path / "different")
+    (inference / "weights").write_bytes(b"preserve")
+    with pytest.raises(RuntimeError, match="EXISTS"):
+        runner.prepare_inference_output(tmp_path / "another", inference)
+    assert (inference / "weights").read_bytes() == b"preserve"
+
+
+def test_inference_output_rejects_nested_output(tmp_path):
+    with pytest.raises(RuntimeError, match="SEPARATE"):
+        runner.prepare_inference_output(tmp_path / "smoke", tmp_path / "smoke/inference")
