@@ -18,6 +18,10 @@ def segment_budget(parameters, config, output, stop, *, trainable_parameters=Non
     output = Path(output)
     resume = {step for step in config['resume_checkpoint_steps'] if step <= stop} | {stop}
     inference = {0} | {step for step in config['evaluation_steps'] if step <= stop}
+    if config.get('soft_reward_continuation'):
+        # A full-state continuation starts after step zero. Its historical
+        # baseline remains in the protected source run; do not reserve a copy.
+        inference.discard(0)
     if config.get('soft_reward', {}).get('enabled'):
         inference.add(stop)
     volumes = defaultdict(lambda: {'retained_bytes': 0, 'atomic_bytes': 0, 'paths': []})

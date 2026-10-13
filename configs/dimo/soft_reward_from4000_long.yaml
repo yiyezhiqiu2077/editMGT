@@ -1,0 +1,219 @@
+teacher_checkpoint: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/selected_teacher
+formal_ready: false
+upstream_reference_commit: 24613741ec9ca730273a6ebc822327878d5a086b
+model:
+  repo_or_root: /data01/zhangyuyang/editmgt_eval_20261010/assets/editmgt
+  resolution: 1024
+resolution: 1024
+precision: bf16
+gradient_checkpointing: true
+model_roles:
+  backend: full_dense
+  student_trainable_scope: full_transformer_and_region
+  auxiliary_trainable_scope: full_transformer_and_region
+  lora_dropout_policy: zero_for_dimo
+  student_lora_dropout: 0.0
+  auxiliary_lora_dropout: 0.0
+  teacher_lora_dropout: inherit
+  lora: false
+  freeze_embed: true
+  freeze_mlm_head: true
+initialization:
+  mask_ratio: 1.0
+  random_tokens_inside_roi: false
+embedding_perturbation:
+  enabled: true
+  sigma: 0.3
+  scope: target_roi_only
+distillation:
+  mode: FKL
+  jeffreys_beta: 0.5
+  teacher_temperature: 1.0
+  auxiliary_temperature: 1.0
+  teacher_cfg: 4.0
+  auxiliary_cfg: 1.0
+  student_cfg: 1.0
+  auxiliary_train_cfg: 1.0
+pseudo_forward:
+  teacher_ratio_mode: cosine
+  auxiliary_ratio_mode: cosine
+  ratio_min: 0.02
+  ratio_max: 0.98
+auxiliary:
+  updates_per_student: 1
+  batch_policy: fresh_batch
+  soft_target_weight: 0.0
+  label_smoothing: 0.1
+sampling:
+  temperature: 1.0
+  top_k: 0
+  top_p: 0.0
+ema:
+  enabled: true
+  decay: 0.9995
+  device: cuda
+gt_anchor:
+  weight: 0.0
+seed: 43
+max_optimizer_steps: 12500
+validation: false
+optimizer:
+  name: AdamW
+  student_learning_rate: 1.0e-06
+  auxiliary_learning_rate: 1.0e-06
+  betas:
+  - 0.9
+  - 0.999
+  weight_decay: 0.0
+  scheduler: constant
+  warmup_steps: 0
+  horizon_steps: 12500
+  student_max_grad_norm: 10.0
+experiment: Soft-DiMO-Editing-Reward-from-v2-Raw4000
+teacher_backend: dense
+distributed:
+  backend: ddp
+  world_size: 4
+  timeout_seconds: 600
+  control_timeout_seconds: 7200
+component_dtypes:
+  teacher: fp32
+  student: fp32
+  auxiliary: fp32
+  gradients: fp32
+  adamw_moments: fp32
+  ema: fp32
+  forward: bf16_autocast
+surrogate:
+  implementation: linear
+  version: roi-vocabulary-sum-v1
+epochs: 5
+batch_per_gpu: 1
+gradient_accumulation: 1
+diagnostic_interval: 20
+resume_checkpoint_steps:
+- 2000
+- 4000
+- 6000
+- 8000
+- 10000
+- 12000
+- 12500
+evaluation_steps:
+- 0
+- 2000
+- 4000
+- 6000
+- 8000
+- 10000
+- 12000
+- 12500
+monitor:
+  interval: 500
+  assets:
+  - loss
+  - gradient
+output_dir: /data/zhangyuyang/soft_dimo_editing_reward_from4000_20261014_long/train
+token_mask:
+  mode: any_overlap
+  coverage_threshold: 0.5
+  dilation_tokens: 0
+  minimum_edit_tokens: 1
+geometry:
+  max_resample_attempts: 8
+  minimum_mask_retention: 0.75
+num_workers: 0
+parity:
+  atol: 1.0e-05
+  rtol: 1.0e-05
+evaluation:
+  plan: /data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/dev128_plan_save2000.json
+experiment_mode: mixed20k_last_sft_dimo
+data:
+  name: fixed_mixed20k_total
+  expected_rows: 20000
+  manifest: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/data/train_20000.jsonl
+  corpus_ready: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/data/MIXED_READY.json
+  verify_hashes_at_read: true
+  roots:
+    magicbrush: /data/zhangyuyang/editmgt_magicbrush_4a800_20261011/data/train
+    crispedit: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/data/materialized/crispedit
+    scaleedit: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/data/materialized/scaleedit
+    interedit: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/data/materialized/interedit
+sft_admission_config: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/configs/sft.yaml
+sft_final_checkpoint: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/sft/train/checkpoint-3750
+user_transition_record: /data/zhangyuyang/editmgt_mixed38k_epoch7_continue_20261011/USER_SELECTED_SFT_DIMO.json
+recipe: dimo-v2
+budget_basis: total_data_consumption
+selected_sft_step: 3750
+full_update_diagnostic_steps:
+- 1
+- 4
+- 20
+- 21
+- 2000
+- 4000
+- 6000
+- 8000
+- 10000
+- 12000
+- 12500
+checkpoint_interval_steps: 2000
+soft_reward:
+  enabled: true
+  extension: soft-dimo-editing-reward-v1
+  fork_checkpoint: /data/zhangyuyang/editmgt_dimo_v2_20261013/train/checkpoints/checkpoint-4000
+  fork_identity:
+    source: /data/zhangyuyang/editmgt_dimo_v2_20261013/train/checkpoints/checkpoint-4000
+    source_step: 4000
+    completed_sha256: 339f751993aac4fbc31ce0886b9572e6da6861acb2b2b2c100e236d2d2ac51c2
+    identity_sha256: 957c23f6769fd8a3442930732e8ef2e51037333f72bdc3bc2db05addd6c42a10
+    student_weights: raw
+    auxiliary_weights: same_checkpoint
+    ema_values: carry_same_checkpoint_shadow_reset_update_count
+    optimizer_policy: reset_both_no_state_transfer
+    scheduler_policy: reset
+    sampler_policy: new_experiment_cursor_zero
+    rng_policy: new_experiment_seed
+  max_new_steps: 500
+  clip_text_enabled: false
+  models:
+    dino: /data01/zhangyuyang/editmgt_eval_20261010/assets/dinov2-base
+    clip: /data01/zhangyuyang/editmgt_eval_20261010/assets/clip-vit-large-patch14
+  lpips_resolution: 512
+  gap_interval: 20
+  calibration:
+    batches: 4
+    relative_scale: 0.1
+    max_weight: 100.0
+  asset_sha256:
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/clip-vit-large-patch14/asset_identity.json: da2816c58bef698afeec75a2743bf8e43613acb823c99e955028ad9d54dceb9e
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/clip-vit-large-patch14/config.json: 8a09b467700c58138c29d53c605b34ebc69beaadd13274a8a2af8ad2c2f4032a
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/clip-vit-large-patch14/model.safetensors: a2bf730a0c7debf160f7a6b50b3aaf3703e7e88ac73de7a314903141db026dcb
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/clip-vit-large-patch14/preprocessor_config.json: 910e70b3956ac9879ebc90b22fb3bc8a75b6a0677814500101a4c072bd7857bd
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/dinov2-base/asset_identity.json: 3c49d24c996e4271af58a9c4060e9c374a299364e4179357aebebfbbf50c24ca
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/dinov2-base/config.json: f7ff4cfa73d2f70647dbf6950541ad25d73082d54c2e7e9bded160c7656b2a70
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/dinov2-base/model.safetensors: d73036b56966966d07975d696bde331762f37297e2f095de8cea0040c3aa0841
+    /data01/zhangyuyang/editmgt_eval_20261010/assets/dinov2-base/preprocessor_config.json: 14e780d86fa1861f8751f868d7f45425b5feb55c38ca26f152ca5097ab30f828
+    /data02/zhangyuyang/code/editMGT/.venv/lib/python3.10/site-packages/lpips/weights/v0.1/alex.pth: df73285e35b22355a2df87cdb6b70b343713b667eddbda73e1977e0c860835c0
+    /home/zhangyuyang/.cache/torch/hub/checkpoints/alexnet-owt-7be5be79.pth: 7be5be791159472b1fbf3c69796f7cb30dca7ad8466c2df70058c37116cdee02
+  inference_output_dir: /data01/zhangyuyang/soft_dimo_editing_reward_from4000_20261014_long/inference
+  library_versions:
+    torch: 2.1.2+cu121
+    torchvision: 0.16.2+cu121
+    diffusers: 0.32.1
+    transformers: 4.47.1
+    lpips: 0.1.4
+  resize_backend: deterministic-separable-antialias-v1
+soft_reward_continuation:
+  schema: soft-reward-authorized-long-v1
+  source: /data/zhangyuyang/soft_dimo_editing_reward_from4000_20261013_retry01/train/checkpoints/checkpoint-20
+  source_step: 20
+  completed_sha256: a729cf10ec56056c74a194eb7da1b7fde1b2079a6dfed925e7a941f264be80fc
+  identity_sha256: 31337170acb5a2a1dc2e216454d043fe0f6e9af3a5f1a4997df11c1fbccad7cd
+  source_config_sha256: 636ef625cddf08200df2982bf0f95b54513cbd44e55c6f68409428726544e475
+  authorization: /data02/zhangyuyang/experiments/soft_dimo_editing_reward_from4000_20261013/USER_LONG_TRAINING_AUTHORIZATION.json
+  authorization_sha256: dcbb27ce0ce99de8d075409182ba8e47095f469f9f782738faabfe284430e5c3
+  target_step: 12500
+  checkpoint_interval: 2000
+  state_policy: preserve_roles_optimizers_schedulers_ema_rng_sampler_reward_calibration

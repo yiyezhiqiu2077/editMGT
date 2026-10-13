@@ -84,3 +84,6 @@ def validate_reward_config(config):
     from importlib.metadata import version
     if any(version(package) != expected for package,expected in reward["library_versions"].items()):
         raise RuntimeError("SOFT_REWARD_LIBRARY_VERSION_CHANGED")
+    if config.get('soft_reward_continuation'):
+        from .reward_continuation import validate_continuation
+        validate_continuation(config)

@@ -42,6 +42,7 @@ def main():
     parser.add_argument("--config", default="configs/dimo/full_dense_d200k.yaml")
     parser.add_argument("--resume")
     parser.add_argument("--fork-dimo-checkpoint", help="explicit weights-only Soft-DiMO fork")
+    parser.add_argument("--continue-soft-reward-checkpoint", help="authorized same-recipe full-state continuation")
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--output-dir")
     parser.add_argument("--stop-at-global-step", type=int)
@@ -53,19 +54,25 @@ def main():
         config["output_dir"] = args.output_dir
     validate_full_config(config, synthetic=args.synthetic)
     reward_config = config.get("soft_reward")
+    continuation = config.get('soft_reward_continuation')
     if reward_config:
         if args.synthetic:
             raise RuntimeError("SOFT_REWARD_USE_CPU_UNIT_TESTS_NOT_FORMAL_SYNTHETIC_FLAG")
-        if args.stop_at_global_step is None or not 0 < args.stop_at_global_step <= reward_config["max_new_steps"]:
+        step_cap = continuation['target_step'] if continuation else reward_config['max_new_steps']
+        if args.stop_at_global_step is None or not 0 < args.stop_at_global_step <= step_cap:
             raise RuntimeError("SOFT_REWARD_EXPLICIT_STOP_REQUIRED_MAX_500_NO_LONG_TRAINING")
-        if bool(args.resume) == bool(args.fork_dimo_checkpoint):
+        if sum(bool(x) for x in (args.resume, args.fork_dimo_checkpoint, args.continue_soft_reward_checkpoint)) != 1:
             raise RuntimeError("SOFT_REWARD_EXACTLY_ONE_EXPLICIT_FORK_OR_RESUME_REQUIRED")
+        if continuation and args.fork_dimo_checkpoint:
+            raise RuntimeError('SOFT_REWARD_LONG_REQUIRES_FULL_STATE_CONTINUATION')
+        if args.continue_soft_reward_checkpoint and not continuation:
+            raise RuntimeError('SOFT_REWARD_LONG_REQUIRES_EXPLICIT_AUTHORIZATION')
         if args.fork_dimo_checkpoint and Path(args.fork_dimo_checkpoint).resolve() != Path(reward_config["fork_checkpoint"]).resolve():
             raise RuntimeError("SOFT_REWARD_USER_SELECTED_FORK_MISMATCH")
         if args.stop_at_global_step > 20:
             from scripts.train.run_soft_dimo_reward import validate_short_gate
-            validate_short_gate(Path(config["output_dir"]))
-    elif args.fork_dimo_checkpoint:
+            validate_short_gate(Path(continuation['source']).parent.parent if continuation else Path(config["output_dir"]))
+    elif args.fork_dimo_checkpoint or args.continue_soft_reward_checkpoint:
         raise RuntimeError("SOFT_REWARD_FORK_REQUIRES_REWARD_CONFIG")
     v2 = is_v2(config)
     runtime_stats = {"student_clip_count": 0}
@@ -191,6 +198,8 @@ def main():
         if reward_config:
             from src.dimo.soft_reward import build_reward_objective
             identity["reward_extension"] = reward_config
+            if continuation:
+                identity['reward_continuation'] = continuation
             reward_objective = build_reward_objective(components.vqvae, reward_config, device)
             runtime_stats["reward_calibration"] = reward_objective.calibration.state
             memory.record("frozen_reward_models_loaded", 0)
@@ -202,6 +211,9 @@ def main():
                 identity['selected_sft_step'] = record['selected_step']
             # Selection metadata above is part of the immutable inference identity.
 
+        if continuation:
+            from src.dimo.reward_continuation import validate_continuation
+            validate_continuation(config, identity)
         if rank == 0:
             manifest_path = output / "experiment_manifest.json"
             if manifest_path.exists() and json.loads(manifest_path.read_text()) != identity:
@@ -222,7 +234,7 @@ def main():
                 reward_config["fork_identity"], identity)
             roles.assert_frozen_unchanged(frozen_hashes)
             memory.record("weights_only_fork_fresh_optimizers", 0)
-        if args.resume:
+        if args.resume or args.continue_soft_reward_checkpoint:
             if exploratory:
                 # Prime the real DDP backward/bucket topology without any
                 # optimizer or EMA update. Loading below restores every RNG.
@@ -239,8 +251,14 @@ def main():
                     del logits
                 memory.record('resume_ddp_backward_priming_no_optimizer',0)
                 del prepared_prime
-            resumed = load_checkpoint(args.resume, roles=roles, optimizers=optimizers, schedulers=schedulers, ema=ema,
-                expected_identity=identity, expected_config_hash=identity["config_sha256"])
+            if args.continue_soft_reward_checkpoint:
+                from src.dimo.reward_continuation import load_continuation
+                resumed = load_continuation(args.continue_soft_reward_checkpoint, config=config, new_identity=identity,
+                    roles=roles, optimizers=optimizers, schedulers=schedulers, ema=ema)
+                memory.record('authorized_full_state_continuation_loaded', resumed['step'])
+            else:
+                resumed = load_checkpoint(args.resume, roles=roles, optimizers=optimizers, schedulers=schedulers, ema=ema,
+                    expected_identity=identity, expected_config_hash=identity["config_sha256"])
             commit = StepCommit(resumed["step"], resumed["cursor"])
             generator.set_state(resumed["loader_rng"]["current"])
             if v2:

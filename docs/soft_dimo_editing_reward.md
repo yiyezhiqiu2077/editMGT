@@ -173,3 +173,30 @@ CUDA `interpolate(antialias=True)` backward 报错；4 rank均在step1提交前�
 CPU double forward/backward与原interpolate对齐并做gradcheck；CUDA测试包括1024→512以及bicubic ROI resize。
 滤波backend显式绑定进recipe，修改后仅能使用新的checkpoint。
 新推理存储移至/data01独立目录，避免保留失败现场后/data02空间不足；无历史文件清理。
+
+用户显式长训授权（2026-10-14）：“请直接进行长训，暂不使用500步短训”。
+原500步流程在最后提交45步时停止，唯一可用的新配方完整断点仍是step20；
+step20已通过4卡Smoke和DEV128 hard/gap检查。从该断点严格恢复两套AdamW/scheduler、
+EMA计数/数值、sampler、rank RNG、loader RNG和Reward calibration；不重置、不混用原DiMO optimizer。
+新的 `soft_reward_continuation` 内容绑定源完整断点、源配置、用户授权记录，
+仅允许输出路径和full-update诊断步列表改变，模型、数据、optimizer和Reward配方逐项保持一致。
+数学recipe一致时验证原identity后读取原full state；新保存带新git/config identity与不可变完整祖先。
+没有显式授权的原配置仍限制最多500步，原500阶段和step500评测已取消。
+
+长训配置 `configs/dimo/soft_reward_from4000_long.yaml`：四卡、batch/GPU=1，
+保持原Mixed20k的5个data epoch预算，累计Soft-DiMO step12500；每2000步保留完整断点和Raw/EMA，最终12500也保存。
+新输出 `/data/zhangyuyang/soft_dimo_editing_reward_from4000_20261014_long/train`，
+新推理导出 `/data01/zhangyuyang/soft_dimo_editing_reward_from4000_20261014_long/inference`。
+协调器仅按2000步保存边界重启同一配方，保持sampler/RNG连续；不执行500步短训，不自动清理文件。
+按下一保存边界检查实际磁盘空间；当前空间可容纳首个2000步段，后续需要用户已说明的清理，空间不足则保留完整断点并停止。
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 \
+/data02/zhangyuyang/code/editMGT/.venv/bin/python scripts/train/run_soft_dimo_reward_long.py \
+  --config configs/dimo/soft_reward_from4000_long.yaml
+```
+
+长训是否实际启动以新输出 `LONG_TRAINING_STATUS.json` 和committed metrics为准。
+28项针对性CPU测试覆盖Reward和完整状态延续；2 rank Gloo延续测试另行验证
+下一步更新逐位一致、EMA/校准一致与单rank断梯度collective abort。
