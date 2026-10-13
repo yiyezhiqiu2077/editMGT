@@ -64,6 +64,8 @@ def complete_dimo_step(
     fresh_batch=None,
     phase_callback=None,
     failure_injector=None,
+    reward_objective=None,
+    reward_batch=None,
 ) -> tuple[dict[str, object], dict[str, torch.Tensor]]:
     """Perform a complete legacy or v2 student/auxiliary/EMA transaction."""
     started = time.perf_counter()
@@ -208,6 +210,7 @@ def complete_dimo_step(
         raise ValueError("unknown DiMO surrogate implementation")
     loss_function = linear_surrogate_logit_loss if objective == "linear" else surrogate_logit_loss
     student_loss = loss_function(student_logits, gradient, teacher_query.pseudo_mask)
+    total_loss, reward_diagnostics = student_loss, {}
     energy = float(distribution_energy(gradient, teacher_query.pseudo_mask))
     teacher_max = float(teacher_logits.abs().max())
     teacher_log_prob = torch.log_softmax(teacher_logits.float(), -1)
@@ -222,7 +225,18 @@ def complete_dimo_step(
     # With gradient checkpointing, recomputation happens during backward and
     # must see the same logical adapter as the original forward.
     roles.activate_adapter("student")
-    student_loss.backward()
+    if config.get("soft_reward", {}).get("enabled"):
+        if reward_objective is None or reward_batch is None:
+            raise RuntimeError("SOFT_REWARD_A_BATCH_REQUIRED")
+        total_loss, reward_diagnostics = reward_objective(student_logits, student_loss,
+            source_tokens, edit_region_mask, reward_batch["target"], reward_batch["pixel_mask"],
+            student_tokens, committed_dimo_step)
+        phase("reward_forward_and_logits_diagnostics")
+    elif reward_objective is not None or reward_batch is not None:
+        raise RuntimeError("SOFT_REWARD_OBJECTIVE_WITHOUT_RECIPE")
+    total_loss.backward()
+    if reward_objective is not None:
+        reward_objective.assert_frozen()
     if getattr(roles, "backend", None) == "full_dense":
         from .distributed import collective_require
         collective_require(all(p.grad is not None and p.grad.dtype == torch.float32
@@ -356,6 +370,7 @@ def complete_dimo_step(
         step_wall_time=time.perf_counter() - started,
         committed_dimo_step=committed_dimo_step + 1,
     )
+    diagnostics.update(reward_diagnostics)
     if v2:
         diagnostics.update(clip_stats)
         diagnostics.update(student_parameter_update_ratio_sampled=diagnostics.pop("student_parameter_update_ratio"),

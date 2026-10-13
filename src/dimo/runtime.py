@@ -8,6 +8,8 @@ import torch
 
 
 def validate_full_config(config, *, synthetic=False):
+    from .reward_fork import validate_reward_config
+    validate_reward_config(config)
     from src.explicit_region.magicbrush_experiment import is_magicbrush, validate_magicbrush_budget
     from .mixed_experiment import is_mixed_dimo, validate_budget
     from .recipe import is_v2, validate_joint_recipe

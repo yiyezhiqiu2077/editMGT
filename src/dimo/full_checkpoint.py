@@ -31,10 +31,17 @@ def validate_v2_state(identity, roles, ema, *, step, cursor, runtime_stats, samp
             or not 0 <= step <= contract["budget"]["optimizer_steps"]
             or type(step) is not int or type(cursor) is not int
             or runtime_stats is None
-            or set(runtime_stats) != {"student_clip_count"}
+            or set(runtime_stats) != ({"student_clip_count", "reward_calibration"}
+                if identity.get("reward_extension") else {"student_clip_count"})
             or type(runtime_stats["student_clip_count"]) is not int
             or not 0 <= runtime_stats["student_clip_count"] <= step):
         raise RuntimeError("DIMO_V2_CHECKPOINT_RECIPE_STATE_MISMATCH")
+    if identity.get("reward_extension"):
+        from .soft_reward import RewardGradientCalibration
+        calibration = RewardGradientCalibration(**identity["reward_extension"]["calibration"])
+        calibration.load_state_dict(runtime_stats["reward_calibration"])
+        if calibration.state["count"] != min(step, calibration.batches):
+            raise RuntimeError("SOFT_REWARD_CALIBRATION_STEP_MISMATCH")
     if sampler_state is not None:
         rows = contract["budget"]["rows_per_epoch"]
         quantum = contract["budget"]["samples_per_optimizer_step"]

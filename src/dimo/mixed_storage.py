@@ -18,6 +18,8 @@ def segment_budget(parameters, config, output, stop, *, trainable_parameters=Non
     output = Path(output)
     resume = {step for step in config['resume_checkpoint_steps'] if step <= stop} | {stop}
     inference = {0} | {step for step in config['evaluation_steps'] if step <= stop}
+    if config.get('soft_reward', {}).get('enabled'):
+        inference.add(stop)
     volumes = defaultdict(lambda: {'retained_bytes': 0, 'atomic_bytes': 0, 'paths': []})
     trainable = parameters if trainable_parameters is None else trainable_parameters
     resume_factor = 12 + 16 * trainable / parameters

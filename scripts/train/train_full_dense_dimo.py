@@ -41,6 +41,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/dimo/full_dense_d200k.yaml")
     parser.add_argument("--resume")
+    parser.add_argument("--fork-dimo-checkpoint", help="explicit weights-only Soft-DiMO fork")
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--output-dir")
     parser.add_argument("--stop-at-global-step", type=int)
@@ -51,6 +52,21 @@ def main():
     if args.output_dir:
         config["output_dir"] = args.output_dir
     validate_full_config(config, synthetic=args.synthetic)
+    reward_config = config.get("soft_reward")
+    if reward_config:
+        if args.synthetic:
+            raise RuntimeError("SOFT_REWARD_USE_CPU_UNIT_TESTS_NOT_FORMAL_SYNTHETIC_FLAG")
+        if args.stop_at_global_step is None or not 0 < args.stop_at_global_step <= reward_config["max_new_steps"]:
+            raise RuntimeError("SOFT_REWARD_EXPLICIT_STOP_REQUIRED_MAX_500_NO_LONG_TRAINING")
+        if bool(args.resume) == bool(args.fork_dimo_checkpoint):
+            raise RuntimeError("SOFT_REWARD_EXACTLY_ONE_EXPLICIT_FORK_OR_RESUME_REQUIRED")
+        if args.fork_dimo_checkpoint and Path(args.fork_dimo_checkpoint).resolve() != Path(reward_config["fork_checkpoint"]).resolve():
+            raise RuntimeError("SOFT_REWARD_USER_SELECTED_FORK_MISMATCH")
+        if args.stop_at_global_step > 20:
+            from scripts.train.run_soft_dimo_reward import validate_short_gate
+            validate_short_gate(Path(config["output_dir"]))
+    elif args.fork_dimo_checkpoint:
+        raise RuntimeError("SOFT_REWARD_FORK_REQUIRES_REWARD_CONFIG")
     v2 = is_v2(config)
     runtime_stats = {"student_clip_count": 0}
     if args.inject_failure and not args.synthetic:
@@ -171,6 +187,13 @@ def main():
         if v2:
             identity.update(schema="full-dense-dimo-identity-v3", recipe="dimo-v2",
                             recipe_contract=recipe_identity(config, roles), frozen_parameter_hashes=frozen_hashes)
+        reward_objective = None
+        if reward_config:
+            from src.dimo.soft_reward import build_reward_objective
+            identity["reward_extension"] = reward_config
+            reward_objective = build_reward_objective(components.vqvae, reward_config, device)
+            runtime_stats["reward_calibration"] = reward_objective.calibration.state
+            memory.record("frozen_reward_models_loaded", 0)
         if exploratory:
             identity.update(experiment_mode=config['experiment_mode'],initialization=config['initialization'],
                             teacher_source=record['teacher_source'],selection_scope=record['selection_scope'])
@@ -193,6 +216,12 @@ def main():
         collective_status()
         generator = torch.Generator().manual_seed(config["seed"] + 10000)
         resumed = None
+        if args.fork_dimo_checkpoint:
+            from src.dimo.reward_fork import fork_weights
+            fork_weights(args.fork_dimo_checkpoint, roles, optimizers, ema,
+                reward_config["fork_identity"], identity)
+            roles.assert_frozen_unchanged(frozen_hashes)
+            memory.record("weights_only_fork_fresh_optimizers", 0)
         if args.resume:
             if exploratory:
                 # Prime the real DDP backward/bucket topology without any
@@ -216,6 +245,8 @@ def main():
             generator.set_state(resumed["loader_rng"]["current"])
             if v2:
                 runtime_stats = resumed["runtime_stats"]
+            if reward_objective is not None:
+                reward_objective.calibration.load_state_dict(runtime_stats["reward_calibration"])
             collective_status()
             error = None
             if rank == 0:
@@ -274,7 +305,7 @@ def main():
                 consumed = verify_batch_pair(prepared, prepared_b, dataset=dataset, sampler=sampler, cursor=commit.cursor)
             else:
                 prepared, prepared_b, consumed = prepare(batch), None, world
-            if commit.step == 0:
+            if commit.step == 0 and not reward_config:
                 kwargs = dict(prepared["model_kwargs"], **prepared["prompt_condition"]["conditional"],
                     hidden_states=prepared["source_tokens"], reference_image_hidden_states=prepared["source_tokens"],
                     edit_region_mask=prepared["edit_region_mask"], timestep=torch.ones(1, device=device))
@@ -310,10 +341,15 @@ def main():
                 base_seed=config["seed"], epoch=sampler.epoch, committed_dimo_step=commit.step,
                 mask_token_id=5 if args.synthetic else roles.base_model.config.vocab_size - 1,
                 codebook_size=5 if args.synthetic else roles.base_model.config.codebook_size,
-                config=config, fresh_batch=prepared_b, phase_callback=stage, failure_injector=failure if args.inject_failure else None),
+                config=config, fresh_batch=prepared_b, phase_callback=stage, failure_injector=failure if args.inject_failure else None,
+                reward_objective=reward_objective,
+                reward_batch=({"target": batch[0]["target_image"].to(device=device, dtype=torch.float32),
+                               "pixel_mask": batch[0]["edit_region_mask"].to(device=device)} if reward_config else None)),
                 samples=consumed, finalize=finalize, failure_injector=failure if args.inject_failure else None)
             sampler.samples_consumed_in_epoch = commit.cursor - sampler.epoch * len(dataset)
             if v2:
+                if reward_objective is not None:
+                    runtime_stats["reward_calibration"] = reward_objective.calibration.state
                 runtime_stats["student_clip_count"] += int(diagnostics["student_clip_triggered"])
                 diagnostics.update(student_clip_fraction=runtime_stats["student_clip_count"] / commit.step,
                     budget_basis="total_data_consumption", total_sample_consumptions=commit.cursor,
@@ -352,6 +388,8 @@ def main():
                 checkpoint()
             if commit.step in config["evaluation_steps"]:
                 checkpoint(inference_only=True)
+            if reward_config and commit.step == stop and commit.step not in config["evaluation_steps"]:
+                checkpoint(inference_only=True)
             # DEV runs are launched separately. In particular, step500 saves
             # its complete checkpoint/inference exports without spawning an
             # evaluator alongside live Student/Auxiliary optimizers and EMA.
@@ -360,6 +398,14 @@ def main():
         if exploratory and stop == 0:
             checkpoint()
         if v2:
+            if reward_objective is not None:
+                reward_objective.assert_frozen()
+                write_json(output / f"reward_acceptance_rank{rank}.json", {
+                    "status": "PASS", "step": commit.step, "gpu_experiment": "REAL_GPU",
+                    "calibration": reward_objective.calibration.state,
+                    "reward_models_frozen": True, "vq_decoder_frozen": True,
+                    "trainable_student_embedding_and_head": False,
+                    "soft_hard_gap_interpretation": "training batch diagnostics; fixed DEV gate required before expansion"})
             roles.assert_frozen_unchanged(frozen_hashes)
             write_json(output / f"v2_acceptance_rank{rank}.json", {"status": "PASS", "frozen_weights": "bitwise_hash_equal",
                 "recipe_contract": identity["recipe_contract"], "completed_updates_per_role": commit.step,
