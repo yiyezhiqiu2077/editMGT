@@ -153,6 +153,7 @@ full_update_diagnostic_steps:
 - 500
 checkpoint_interval_steps: 2000
 soft_reward:
+  resize_backend: deterministic-separable-antialias-v1
   enabled: true
   extension: soft-dimo-editing-reward-v1
   fork_checkpoint: /data/zhangyuyang/editmgt_dimo_v2_20261013/train/checkpoints/checkpoint-4000

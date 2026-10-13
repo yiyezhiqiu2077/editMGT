@@ -117,27 +117,27 @@ CPU数据流正确不能当作以上实验已通过。
 
 原DiMO-v2实测每卡peak reserved≈47.68 GiB；新Reward路径粗估每张A800需60–75 GiB，batch/GPU=1、4卡DDP、1024图像。
 这是估计，1024反向峰值尚未测；Smoke reserved峰值>75 GiB则不扩大训练。
-实际需要由20-step memory_rank日志确认。当前4卡空闲，不自动启动任何GPU工作。
+实际需要由20-step memory_rank日志确认。用户 continue 后已启动GPU Smoke；第一次在首步提交前因CUDA抗锯齿resize的非确定性backward报错退出，详见下文。
 
 完整断点≈27.96 GB，Raw+EMA推理导出≈8.07 GB。
-新实验完整断点在 `/data/zhangyuyang/soft_dimo_editing_reward_from4000_20261013/train`，
-新推理导出在 `/data02/zhangyuyang/experiments/soft_dimo_editing_reward_from4000_20261013/inference`，
+新实验完整断点在 `/data/zhangyuyang/soft_dimo_editing_reward_from4000_20261013_retry01/train`，
+新推理导出在 `/data01/zhangyuyang/soft_dimo_editing_reward_from4000_20261013_retry01/inference`，
 通过新实验自身的 inference symlink 关联，不改变原实验目录。
-包含Smoke20/short500保留和atomic空间，预算 `/data`≈94.88 GB、`/data02`≈39.18 GB；
-检查时剩余约108.56/42.76 GB。命令会再次实际检查，空间变化会拒绝运行，不自动清理文件。
+包含Smoke20/short500保留和atomic空间，预算 `/data`≈94.88 GB、`/data01`≈39.18 GB；
+检查时剩余约108.56/43.84 GB。命令会再次实际检查，空间变化会拒绝运行，不自动清理文件。
 
-以下命令均**未执行**。须保持新工作树 clean commit，与checkpoint identity绑定。
+以下为修复后的独立 retry01 命令；是否执行以 GPU_EXECUTION_STATUS.json 和实际输出为准。须保持新工作树 clean commit，与checkpoint identity绑定。
 
 ```bash
 cd /data02/zhangyuyang/code/editMGT-soft-dimo-editing-reward
 SOFT_DIMO_PYTHON=/data02/zhangyuyang/code/editMGT/.venv/bin/python
-SOFT_DIMO_RUN=/data/zhangyuyang/soft_dimo_editing_reward_from4000_20261013/train
+SOFT_DIMO_RUN=/data/zhangyuyang/soft_dimo_editing_reward_from4000_20261013_retry01/train
 SOFT_DIMO_PLAN=/data02/zhangyuyang/experiments/editmgt_dimo_v2_20261013/dev128_plan_save2000.json
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
 
 # 1. 显式fork，20步Smoke；新输出目录必须不存在，不自动后续训练。
 CUDA_VISIBLE_DEVICES=0,1,2,3 "$SOFT_DIMO_PYTHON" scripts/train/run_soft_dimo_reward.py \
-  --config configs/dimo/soft_reward_from4000.yaml --mode smoke
+  --config configs/dimo/soft_reward_from4000_deterministic_resize.yaml --mode smoke
 
 # 2. 仅评测，包含step0硬图与原4000一致性以及step20固定Soft/Hard gate。
 CUDA_VISIBLE_DEVICES=0 "$SOFT_DIMO_PYTHON" scripts/eval/evaluate_soft_dimo_reward.py \
@@ -145,7 +145,7 @@ CUDA_VISIBLE_DEVICES=0 "$SOFT_DIMO_PYTHON" scripts/eval/evaluate_soft_dimo_rewar
 
 # 3. 只有GPU_SMOKE_PASS + QUALITY_GATE_step20都PASS才恢复同一新recipe，累计500步。
 CUDA_VISIBLE_DEVICES=0,1,2,3 "$SOFT_DIMO_PYTHON" scripts/train/run_soft_dimo_reward.py \
-  --config configs/dimo/soft_reward_from4000.yaml --mode short
+  --config configs/dimo/soft_reward_from4000_deterministic_resize.yaml --mode short
 
 # 4. 仅评测500步hard质量与Soft/Hard gap，输出报告和固定拼图；不扩展训练。
 CUDA_VISIBLE_DEVICES=0 "$SOFT_DIMO_PYTHON" scripts/eval/evaluate_soft_dimo_reward.py \
@@ -164,3 +164,12 @@ CUDA_VISIBLE_DEVICES='' "$SOFT_DIMO_PYTHON" scripts/diagnostics/verify_soft_rewa
 CUDA_VISIBLE_DEVICES='' "$SOFT_DIMO_PYTHON" -m torch.distributed.run --standalone --nproc_per_node=2 \
   tests/dimo/soft_reward_ddp_worker.py --output /tmp/soft_reward_cpu_ddp_new
 ```
+
+GPU Smoke 首次兼容性修复（2026-10-14 北京时间）：严格确定性模式下，当前PyTorch的
+CUDA `interpolate(antialias=True)` backward 报错；4 rank均在step1提交前一致abort，
+没有optimizer/EMA更新。原失败目录和step0导出保留，不覆盖。
+修复使用CPU预计算固定抗锯齿轴滤波矩阵，生成图像仅在原设备上做可微separable matmul；
+生成图像没有CPU/NumPy/PIL/detach中转，保持严格确定性和gen/target一致的滤波规则。
+CPU double forward/backward与原interpolate对齐并做gradcheck；CUDA测试包括1024→512以及bicubic ROI resize。
+滤波backend显式绑定进recipe，修改后仅能使用新的checkpoint。
+新推理存储移至/data01独立目录，避免保留失败现场后/data02空间不足；无历史文件清理。

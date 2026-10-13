@@ -65,6 +65,7 @@ def validate_reward_config(config):
             or config.get("recipe") != "dimo-v2" or reward.get("max_new_steps") != 500
             or reward.get("clip_text_enabled") is not False
             or reward.get("lpips_resolution") != 512 or reward.get("gap_interval") != 20
+            or reward.get("resize_backend") != "deterministic-separable-antialias-v1"
             or reward.get("calibration") != {"batches": 4, "relative_scale": .1, "max_weight": 100.}):
         raise RuntimeError("SOFT_REWARD_UNREGISTERED_RECIPE")
     manifest = fork_manifest(reward["fork_checkpoint"])

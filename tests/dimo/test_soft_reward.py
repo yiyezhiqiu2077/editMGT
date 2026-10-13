@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from src.dimo.soft_reward import (SoftEmbeddingEditDecoder, DifferentiableMaskedLPIPS,
     EditingRewards, RewardGradientCalibration, SoftRewardObjective, crop_preprocess, roi_boxes)
+from src.dimo.soft_reward import deterministic_antialias_resize
 from src.dimo.reward_fork import fork_manifest, fork_weights, protect_outputs
 from src.dimo.full_checkpoint import save, load
 from src.dimo.recipe import recipe_identity
@@ -136,6 +137,22 @@ def test_shared_roi_preprocessing_identical_target_and_small_roi_semantics():
     sum(values.values()).backward()
     assert all(p.grad is None and not p.requires_grad for p in rewards.parameters())
     assert all(torch.equal(v,state[k]) for k,v in rewards.state_dict().items())
+
+
+@pytest.mark.parametrize('mode', ['bilinear', 'bicubic'])
+@pytest.mark.parametrize('size', [(3, 5), (13, 19)])
+def test_deterministic_antialias_forward_backward_and_numerical_gradient(mode, size):
+    image = torch.rand(1, 2, 7, 11, dtype=torch.double, requires_grad=True)
+    reference = torch.nn.functional.interpolate(image, size=size, mode=mode,
+        align_corners=False, antialias=True)
+    actual = deterministic_antialias_resize(image, size, mode=mode)
+    torch.testing.assert_close(actual, reference, rtol=1e-12, atol=1e-12)
+    upstream = torch.randn_like(actual)
+    expected_grad = torch.autograd.grad(reference, image, upstream)[0]
+    actual_grad = torch.autograd.grad(actual, image, upstream)[0]
+    torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-12, atol=1e-12)
+    assert torch.autograd.gradcheck(lambda x: deterministic_antialias_resize(x, size, mode=mode),
+        (image,), atol=1e-6)
 
 
 def test_gradient_calibration_uses_norms_not_loss_values_and_resume():

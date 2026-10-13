@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+from functools import lru_cache
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -15,6 +16,33 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 NAMES = ("lpips", "dino", "clip")
+
+
+@lru_cache(maxsize=64)
+def _antialias_axis_weights(length, output_length, mode, device, dtype):
+    # Construct the fixed linear resampling operator on CPU. Only constants
+    # cross devices; generated images and their gradients stay on their device.
+    basis = torch.eye(length, dtype=dtype).reshape(length, 1, 1, length)
+    weights = F.interpolate(basis, size=(1, output_length), mode=mode,
+                            align_corners=False, antialias=True)[:, 0, 0].T
+    return weights.contiguous().to(device=device)
+
+
+def deterministic_antialias_resize(image, size, *, mode):
+    """Separable PyTorch antialias filter with deterministic matmul backward.
+
+    CUDA interpolate(antialias=True) backward uses atomic accumulation and
+    raises under strict deterministic algorithms. Applying its constant axis
+    filters as matrix products preserves the antialias recipe and autograd.
+    """
+    if mode not in ("bilinear", "bicubic"):
+        raise ValueError("unsupported differentiable antialias filter")
+    if tuple(image.shape[-2:]) == tuple(size):
+        return image
+    h, w = image.shape[-2:]
+    a = _antialias_axis_weights(h, size[0], mode, image.device, image.dtype)
+    b = _antialias_axis_weights(w, size[1], mode, image.device, image.dtype)
+    return torch.matmul(torch.matmul(a, image), b.T)
 
 
 def freeze(module):
@@ -114,7 +142,7 @@ def crop_preprocess(image, boxes, *, shortest_edge, crop_size, mean, std):
         h, w = crop.shape[-2:]
         size = (max(crop_size, int(h * shortest_edge / min(h, w))),
                 max(crop_size, int(w * shortest_edge / min(h, w))))
-        crop = F.interpolate(crop.float(), size=size, mode="bicubic", align_corners=False, antialias=True)
+        crop = deterministic_antialias_resize(crop.float(), size, mode="bicubic")
         h, w = crop.shape[-2:]
         crop = crop[:, :, (h-crop_size)//2:(h-crop_size)//2+crop_size,
                     (w-crop_size)//2:(w-crop_size)//2+crop_size]
@@ -143,8 +171,8 @@ class EditingRewards(nn.Module):
         mask = pixel_mask[:, None] if pixel_mask.ndim == 3 else pixel_mask
         boxes = roi_boxes(mask)
         size = (min(generated.shape[-2], self.lpips_resolution), min(generated.shape[-1], self.lpips_resolution))
-        ga = F.interpolate(generated.float(), size=size, mode="bilinear", align_corners=False, antialias=True)
-        ta = F.interpolate(target.float(), size=size, mode="bilinear", align_corners=False, antialias=True)
+        ga = deterministic_antialias_resize(generated.float(), size, mode="bilinear")
+        ta = deterministic_antialias_resize(target.float(), size, mode="bilinear")
         ma = F.interpolate(mask.float(), size=size, mode="area")
         losses = {"lpips": self.lpips(ga, ta, ma)}
         for name in ("dino", "clip"):
