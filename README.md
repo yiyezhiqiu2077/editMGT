@@ -5,7 +5,7 @@
 ## 快速开始
 
 ```bash
-git clone git@github.com:yiyezhiqiu2077/editMGT.git
+git clone --branch fix/e3-quality-pipeline-v1 git@github.com:yiyezhiqiu2077/editMGT.git
 cd editMGT
 
 uv sync --frozen --group dev --group translation --group metrics
@@ -54,16 +54,18 @@ uv run python scripts/train/train_explicit_region.py \
   --config configs/train/local_one_step.yaml
 ```
 
-8-GPU 入口：
+已有 frozen D200K 时，按 [实验流程](docs/EXPERIMENTS.md) 配置现有路径并导入 `formal_env.sh`，然后运行：
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export CONFIRM_FORMAL_RUN=YES
 
+bash scripts/cluster/reattest_existing_fixed200k.sh
 bash scripts/cluster/run_8g_smoke.sh --run
-bash scripts/cluster/run_lr_probes.sh --run
-bash scripts/cluster/run_e1_e4.sh --run
+bash scripts/train/run_cluster_e3.sh --run
 ```
+
+正式训练仅运行 E3：5 epochs / 31,250 optimizer steps，LR=3e-5。训练完成后基于 DEV 选择 checkpoint。
 
 ### E0–E4
 
@@ -76,7 +78,7 @@ bash scripts/cluster/run_e1_e4.sh --run
 | E3 | ROI hard lock / ON | both |
 | E4 | ROI hard lock / ON | reference only |
 
-E1–E4 使用相同的 D200K、sample order、seed 和训练预算。
+E0-official 为 released baseline；E0-region、E1、E2、E4 保留为后续可选 ablation，不在本次 E3-only 正式训练中执行。
 
 ## Region-DiMO
 
@@ -144,4 +146,3 @@ git diff --check
 - [代码结构](docs/ARCHITECTURE.md)
 - [Region-DiMO](docs/DIMO_PORTING.md)
 - [环境配置](docs/ENVIRONMENT.md)
-

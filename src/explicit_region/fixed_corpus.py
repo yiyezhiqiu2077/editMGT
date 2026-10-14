@@ -267,5 +267,22 @@ def verify_corpus_ready(path: str | Path) -> dict:
     return payload
 
 
+def verify_mini_corpus_ready(path: str | Path, *, expected_rows: int) -> dict:
+    marker = Path(path)
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    if (
+        payload.get("status") != "READY"
+        or payload.get("schema_version") != "mini-corpus-ready-v1"
+        or payload.get("dev_only") is not True
+        or payload.get("total_rows") != expected_rows
+    ):
+        raise RuntimeError("MINI_CORPUS_NOT_READY: invalid dev corpus attestation")
+    for name, record in payload.get("files", {}).items():
+        target = Path(record["path"])
+        if not target.is_file() or sha256_file(target) != record["sha256"]:
+            raise RuntimeError(f"MINI_CORPUS_NOT_READY: hash mismatch for {name}")
+    return payload
+
+
 def corpus_counts(rows: Iterable[dict]) -> dict:
     return dict(Counter(row["dataset_name"] for row in rows))

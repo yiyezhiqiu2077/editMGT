@@ -48,12 +48,14 @@ def parse_record(row: dict) -> InterEditRecord:
         raise ValueError(f"Inter-Edit row missing keys: {missing}")
     if row["edit_type"] not in {"Add", "Remove", "Local", "Texture"}:
         raise ValueError(f"unsupported Inter-Edit edit_type: {row['edit_type']}")
+    if type(row["better_data"]) is not bool:
+        raise ValueError("Inter-Edit better_data must be a JSON boolean")
     return InterEditRecord(
         sample_id=int(row["sample_id"]),
         source_id=int(row["source_id"]),
         edit_type=row["edit_type"],
         instruction_original=str(row["instruction"]),
-        better_data=bool(row["better_data"]),
+        better_data=row["better_data"],
         source_archive=str(row["source_archive"]),
         source_file=str(row["source_file"]),
         asset_archive=str(row["asset_archive"]),
@@ -91,7 +93,10 @@ class TarMemberReader:
             path.relative_to(self.root.resolve())
         except ValueError as exc:
             raise ValueError(f"archive escapes Inter-Edit root: {archive}") from exc
-        handle = self._handles.setdefault(path, tarfile.open(path, "r:*"))
+        handle = self._handles.get(path)
+        if handle is None:
+            handle = tarfile.open(path, "r:*")
+            self._handles[path] = handle
         extracted = handle.extractfile(member)
         if extracted is None:
             raise FileNotFoundError(f"{member} not found in {path}")

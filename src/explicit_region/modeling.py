@@ -29,6 +29,7 @@ class ReleasedComponents:
 def load_released_components(
     model_root: str, *, identity_output=None, torch_dtype: torch.dtype | None = None,
     vq_dtype: torch.dtype | None = None,
+    transformer_dtype: torch.dtype | None = None,
 ) -> ReleasedComponents:
     identity = audit_component_identity(model_root, identity_output)
     common = {"local_files_only": True}
@@ -38,7 +39,8 @@ def load_released_components(
         # Disable low-memory meta loading so that this one new parameter keeps
         # its constructor initialization while every released key is loaded.
         transformer=Transformer2DModel.from_pretrained(
-            model_root, subfolder="editmgt", low_cpu_mem_usage=False, **model_common
+            model_root, subfolder="editmgt", low_cpu_mem_usage=False,
+            **(model_common | ({"torch_dtype": transformer_dtype} if transformer_dtype is not None else {}))
         ),
         text_encoder=CLIPTextModelWithProjection.from_pretrained(
             model_root, subfolder="text_encoder", **model_common

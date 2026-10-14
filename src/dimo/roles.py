@@ -196,11 +196,25 @@ def audit_role_optimizers(
     auxiliary_actual = {id(p) for group in auxiliary_optimizer.param_groups for p in group["params"]}
     if student_actual != student_expected or auxiliary_actual != auxiliary_expected:
         raise RuntimeError("optimizer membership violates DiMO role isolation")
+    if (sum(len(group["params"]) for group in student_optimizer.param_groups) != len(student_expected)
+            or sum(len(group["params"]) for group in auxiliary_optimizer.param_groups) != len(auxiliary_expected)):
+        raise RuntimeError("duplicate optimizer parameter membership")
     if student_actual & auxiliary_actual:
         raise RuntimeError("student and auxiliary optimizers overlap")
     teacher = roles.role_named_parameters("teacher")
     if any(parameter.requires_grad for _, parameter in teacher):
         raise RuntimeError("teacher role must be frozen")
+    if getattr(roles, "backend", None) == "full_dense":
+        roles.audit_storage()
+        if any(not p.requires_grad for role in ("student", "auxiliary") for _, p in roles.role_named_parameters(role)):
+            raise RuntimeError("FULL_DENSE_TRAINABLE_COVERAGE_INCOMPLETE")
+        report = {"backend": "full_dense", "teacher_trainable": 0,
+            "student_trainable": sum(p.numel() for _, p in roles.role_named_parameters("student")),
+            "auxiliary_trainable": sum(p.numel() for _, p in roles.role_named_parameters("auxiliary")),
+            "optimizer_overlap": 0, "base_trainable": 0}
+        if output_path is not None:
+            Path(output_path).write_text(json.dumps(report, indent=2) + "\n")
+        return report
     base_trainable = [
         name for name, parameter in roles.base_model.named_parameters()
         if parameter.requires_grad

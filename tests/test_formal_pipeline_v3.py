@@ -110,7 +110,7 @@ def test_run_formal_refuses_missing_formal_ready(tmp_path):
     assert "FORMAL_PIPELINE_NOT_READY" in completed.stderr + completed.stdout
 
 
-def test_run_formal_refuses_selection_not_ready(tmp_path):
+def test_train_verifier_does_not_require_selection_ready(tmp_path):
     import os
     git = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     fixed = tmp_path / "derived/fixed200k"; fixed.mkdir(parents=True)
@@ -134,6 +134,15 @@ def test_run_formal_refuses_selection_not_ready(tmp_path):
         "formal_assets_sha256": sha256_file(formal), "corpus_ready_sha256": sha256_file(corpus),
         "smoke_verification": {"path": str(smoke), "sha256": sha256_file(smoke)}}))
     env = os.environ | {"ASSET_ROOT": str(tmp_path), "DERIVED_ROOT": str(tmp_path / "derived"), "CONFIRM_FORMAL_RUN": "YES"}
-    completed = subprocess.run(["bash", "scripts/train/run_formal.sh", "configs/train/cluster_8g_e1.yaml", "--run"], cwd=ROOT, env=env, text=True, capture_output=True)
+    completed = subprocess.run(["uv", "run", "python", "scripts/setup/verify_formal_pipeline.py",
+        "--mode", "train", "--formal-assets", str(formal), "--corpus-ready", str(corpus),
+        "--formal-ready", str(ready), "--selection-config", "configs/eval/formal.yaml"],
+        cwd=ROOT, env=env, text=True, capture_output=True)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)['status'] == 'READY'
+    completed = subprocess.run(["uv", "run", "python", "scripts/setup/verify_formal_pipeline.py",
+        "--mode", "select", "--formal-assets", str(formal), "--corpus-ready", str(corpus),
+        "--formal-ready", str(ready), "--selection-config", "configs/eval/formal.yaml"],
+        cwd=ROOT, env=env, text=True, capture_output=True)
     assert completed.returncode != 0
-    assert "SELECTION_RULE_NOT_PREREGISTERED" in completed.stderr + completed.stdout
+    assert "SELECTION_RULE_NOT_PREREGISTERED" in completed.stderr

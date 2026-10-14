@@ -1,0 +1,12 @@
+resolution: 1024
+provided_region_hard_lock: true
+token_mask: {mode: any_overlap, dilation_tokens: 0, minimum_edit_tokens: 1}
+steps: 12
+guidance_scale: 10.0
+reference_strength: 1.0
+inference_timestep_mode: roi_relative
+# The Mini budget is defined in generations, so each sample uses one fixed seed.
+generation_seeds: [0]
+bootstrap: {seed: 42, resamples: 1000, unit: sample_after_seed_mean}
+report_datasets_separately: true
+selection: {status: DIAGNOSTIC_ONLY, threshold_preserve: null, tau_edit: null, tau_noop: null}

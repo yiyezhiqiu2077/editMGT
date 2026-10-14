@@ -1,0 +1,15 @@
+extends: full_dense.yaml
+experiment: CPU-SYNTHETIC-Full-DenseDiMO
+formal_ready: false
+teacher_checkpoint: CPU_SYNTHETIC
+model: {repo_or_root: CPU_SYNTHETIC}
+distributed: {backend: ddp, world_size: 2, timeout_seconds: 30}
+ema: {device: cpu}
+embedding_perturbation: {enabled: false, sigma: 0.0}
+max_optimizer_steps: 20
+optimizer: {horizon_steps: 20}
+resume_checkpoint_steps: [1, 20]
+evaluation_steps: [0, 20]
+output_dir: runs/full_dense_cpu_smoke
+evaluation: {plan: null}
+data: {name: synthetic, expected_rows: 512, manifest: CPU_SYNTHETIC, corpus_ready: CPU_SYNTHETIC, roots: {}}

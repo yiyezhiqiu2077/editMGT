@@ -1,0 +1,2 @@
+extends: e3_base.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-full-16

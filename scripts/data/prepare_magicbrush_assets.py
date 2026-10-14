@@ -3,7 +3,7 @@
 from __future__ import annotations
 import argparse,json,os
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageChops, ImageOps
 
 
 REQUIRED=("img_id","turn_index","instruction","source_img","target_img","mask_img")
@@ -11,6 +11,21 @@ REQUIRED=("img_id","turn_index","instruction","source_img","target_img","mask_im
 def save(value,path,mode):
     image=value if isinstance(value,Image.Image) else value.convert(mode)
     image.convert(mode).save(path)
+
+
+def edit_mask_from_raw(value) -> Image.Image:
+    """Convert the official erased-source mask to white=editable semantics."""
+    image = value if isinstance(value, Image.Image) else value.convert("RGBA")
+    bands = image.getbands()
+    if "A" in bands:
+        return ImageOps.invert(image.getchannel("A"))
+    if image.mode == "RGB":
+        red, green, blue = image.split()
+        if ImageChops.difference(red, green).getbbox() or ImageChops.difference(red, blue).getbbox():
+            raise ValueError("ambiguous colored MagicBrush mask without alpha")
+    if image.mode not in ("1", "L", "RGB"):
+        raise ValueError(f"unsupported MagicBrush mask mode: {image.mode}")
+    return image.convert("L")
 
 def prepare_split(snapshot:Path,split:str,output:Path,expected:int):
     from datasets import load_dataset
@@ -22,8 +37,10 @@ def prepare_split(snapshot:Path,split:str,output:Path,expected:int):
         missing=[key for key in REQUIRED if key not in item or item[key] is None]
         if missing: raise RuntimeError(f"SCHEMA_CONTRACT_MISMATCH: MagicBrush row {index} missing {missing}")
         img_id=str(item["img_id"]);turn=int(item["turn_index"]);stem=f"{index:05d}_{img_id}_turn{turn}"
-        paths={"source":images/f"{stem}_source.png","target":images/f"{stem}_target.png","mask_edit":images/f"{stem}_mask.png"}
-        save(item["source_img"],paths["source"],"RGB");save(item["target_img"],paths["target"],"RGB");save(item["mask_img"],paths["mask_edit"],"L")
+        paths={"source":images/f"{stem}_source.png","target":images/f"{stem}_target.png","mask_raw":images/f"{stem}_mask_raw.png","mask_edit":images/f"{stem}_mask_edit.png"}
+        save(item["source_img"],paths["source"],"RGB");save(item["target_img"],paths["target"],"RGB")
+        item["mask_img"].save(paths["mask_raw"])
+        edit_mask_from_raw(item["mask_img"]).save(paths["mask_edit"])
         rows.append({"sample_key":f"magicbrush/{img_id}_turn{turn}","img_id":img_id,"turn_index":turn,"instruction":str(item["instruction"]).strip(),**{k:v.relative_to(output).as_posix() for k,v in paths.items()}})
     if len(rows)!=expected: raise RuntimeError(f"MagicBrush {split} expected {expected}, got {len(rows)}")
     if len({r["sample_key"] for r in rows})!=len(rows) or any(not r["instruction"] for r in rows): raise RuntimeError("MagicBrush identity/instruction contract failed")

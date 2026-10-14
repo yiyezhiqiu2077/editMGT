@@ -37,7 +37,7 @@ def _merge(base: dict, override: dict) -> dict:
     return merged
 
 
-def load_config(path: str | Path) -> dict:
+def _load_unexpanded(path: Path) -> dict:
     path = Path(path)
     with path.open(encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -48,5 +48,12 @@ def load_config(path: str | Path) -> dict:
         parent_path = Path(parent)
         if not parent_path.is_absolute():
             parent_path = path.parent / parent_path
-        config = _merge(load_config(parent_path), config)
-    return _expand(config)
+        config = _merge(_load_unexpanded(parent_path), config)
+    return config
+
+
+def load_config(path: str | Path) -> dict:
+    # Expand only after inheritance is fully resolved.  Otherwise an
+    # environment placeholder in a parent remains spuriously required even
+    # when the child replaces that field.
+    return _expand(_load_unexpanded(Path(path)))

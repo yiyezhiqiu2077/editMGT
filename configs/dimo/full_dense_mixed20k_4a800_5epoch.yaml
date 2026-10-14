@@ -1,0 +1,26 @@
+extends: full_dense_magicbrush_4a800_10epoch.yaml
+experiment: Full-DenseDiMO-Mixed20K-LastSFT-4A800-5Epoch
+experiment_mode: mixed20k_last_sft_dimo
+teacher_checkpoint: ${MIXED_EXPERIMENT_ROOT}/selected_teacher
+sft_admission_config: ${MIXED_EXPERIMENT_ROOT}/configs/sft.yaml
+sft_final_checkpoint: ${MIXED_EXPERIMENT_ROOT}/sft/train/checkpoint-6250
+user_transition_record: ${MIXED_EXPERIMENT_ROOT}/USER_AUTO_LAST_SFT_DIMO.json
+epochs: 5
+max_optimizer_steps: 25000
+optimizer:
+  horizon_steps: 25000
+resume_checkpoint_steps: [5000, 15000, 25000]
+evaluation_steps: [0, 5000, 15000, 25000]
+output_dir: ${MIXED_EXPERIMENT_ROOT}/dimo/train
+evaluation:
+  plan: ${MIXED_EXPERIMENT_ROOT}/evaluation_plan.json
+data:
+  name: fixed_mixed20k_total
+  expected_rows: 20000
+  manifest: ${MIXED_EXPERIMENT_ROOT}/data/train_20000.jsonl
+  corpus_ready: ${MIXED_EXPERIMENT_ROOT}/data/MIXED_READY.json
+  roots:
+    magicbrush: ${PREVIOUS_EXPERIMENT_ROOT}/data/train
+    crispedit: ${MIXED_EXPERIMENT_ROOT}/data/materialized/crispedit
+    scaleedit: ${MIXED_EXPERIMENT_ROOT}/data/materialized/scaleedit
+    interedit: ${MIXED_EXPERIMENT_ROOT}/data/materialized/interedit

@@ -97,6 +97,10 @@ def teacher_bundle_fingerprint(
 ) -> dict[str, Any]:
     """Fingerprint every artifact that defines the teacher's behavior."""
     root = Path(checkpoint).expanduser().resolve()
+    manifest_path = root / TEACHER_MANIFEST
+    if manifest_path.is_file() and json.loads(manifest_path.read_text()).get("teacher_backend") == "dense":
+        from .dense_teacher import dense_teacher_fingerprint
+        return dense_teacher_fingerprint(root, expected_base_identity=base_model_identity, formal=formal)
     result: dict[str, Any] = {"base_model_identity": base_model_identity}
     missing = []
     for field, filename in TEACHER_BUNDLE_FILES.items():
@@ -144,6 +148,9 @@ def load_teacher_contract(
     if not manifest_path.is_file():
         raise RuntimeError(f"teacher checkpoint is missing {TEACHER_MANIFEST}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("teacher_backend") == "dense":
+        from .dense_teacher import load_dense_teacher_contract
+        return load_dense_teacher_contract(root, expected_base_identity=expected_base_identity)
     missing = sorted(REQUIRED_TEACHER_FIELDS - set(manifest))
     if missing:
         raise RuntimeError(f"teacher checkpoint contract is incomplete: {missing}")

@@ -1,0 +1,6 @@
+extends: e3_base.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-smoke-2
+max_optimizer_steps: 2
+scheduler_horizon_steps: 2
+warmup_steps: 0
+checkpoint_steps: [2]

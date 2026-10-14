@@ -1,2 +1,10 @@
 extends: _cluster_8g_base.yaml
 output_dir: ${EDITMGT_OUTPUT_ROOT}/e3-roi-condition-both
+experiment: E3-D200K-5Epoch
+epochs: 5
+max_optimizer_steps: 31250
+scheduler_horizon_steps: 31250
+checkpoint_steps: [3125, 6250, 9375, 12500, 15625, 18750, 21875, 25000, 28125, 31250]
+validation:
+  interval_steps: 3125
+  inference_config: configs/eval/e3_periodic_probe.yaml

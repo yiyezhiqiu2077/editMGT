@@ -1,0 +1,14 @@
+extends: mixed30k_plus_magicbrush.yaml
+schema_version: mixed20k-total-v1
+train_total: 20000
+dataset_policy:
+  magicbrush: {use_all_eligible: true, fixed_count: 8784}
+  crispedit: {cap: 2400}
+  scaleedit: {cap: 7200}
+  interedit: {fill_remaining: true, only_better_data: true}
+mirror:
+  initial_candidate_rows: {crispedit: 6000, scaleedit: 9000}
+  interedit_asset_shards: 1
+  download_priority: [nllb, interedit, scaleedit, crispedit]
+translation:
+  early_translation_scope: bounded_provisional_interedit_candidates_and_reserves

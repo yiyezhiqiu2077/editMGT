@@ -1,0 +1,20 @@
+extends: ../dimo/prep_smoke.yaml
+
+teacher_checkpoint: ${DIMO_TEACHER_CHECKPOINT}
+formal_ready: false
+max_optimizer_steps: 2
+batch_per_gpu: 1
+num_workers: 0
+lora_scope: both
+data:
+  name: fixed_corpus_dev
+  manifest: ${MINI_ROOT}/corpus/train_512.jsonl
+  corpus_ready: ${MINI_ROOT}/corpus/MINI_CORPUS_READY.json
+  expected_rows: 512
+  verify_hashes_at_read: true
+  roots:
+    magicbrush: ${MINI_ROOT}/assets/magicbrush/train
+    crispedit: ${MINI_ROOT}/assets/crispedit
+    scaleedit: ${MINI_ROOT}/assets/scaleedit
+    interedit: ${MINI_ROOT}/assets/interedit
+output_dir: ${MINI_ROOT}/runs/dimo-prep-2

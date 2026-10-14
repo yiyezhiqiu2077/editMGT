@@ -18,7 +18,7 @@ def _pil(tensor):
 
 def run_validation(*, components, transformer, train_config, step, output_dir, device):
     validation=train_config["validation"]; infer=load_config(validation["inference_config"])
-    rng=(torch.get_rng_state(),torch.cuda.get_rng_state_all(),random.getstate(),np.random.get_state())
+    rng=(torch.get_rng_state(),torch.cuda.get_rng_state(device),random.getstate(),np.random.get_state())
     root=Path(output_dir)/f"validation-{step}";root.mkdir(parents=True,exist_ok=True)
     pipe=Pipeline(transformer=transformer,tokenizer=components.tokenizer,text_encoder=components.text_encoder,
                   vqvae=components.vqvae,scheduler=components.scheduler,tokenizer_t5=components.llm_tokenizer,
@@ -54,6 +54,26 @@ def run_validation(*, components, transformer, train_config, step, output_dir, d
         result["validation_wall_seconds"] = sum(record["runtime_seconds"] for record in records)
         (root/"validation_metrics.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     finally:
-        torch.set_rng_state(rng[0]);torch.cuda.set_rng_state_all(rng[1]);random.setstate(rng[2]);np.random.set_state(rng[3]);transformer.train()
+        torch.set_rng_state(rng[0]);torch.cuda.set_rng_state(rng[1],device);random.setstate(rng[2]);np.random.set_state(rng[3]);transformer.train()
         components.text_encoder.eval();components.llm_encoder.eval();components.vqvae.eval()
     return result
+
+
+def record_periodic_diagnostic(output, train_row, evaluation):
+    """Observational trend only: no ranking, selection, TEST, or recipe changes."""
+    from .metrics import finite_mean
+    path = Path(output) / 'periodic_quality_trend.json'
+    history = json.loads(path.read_text())['checkpoints'] if path.exists() else []
+    names = ('inside_masked_lpips', 'inside_psnr', 'inside_ssim',
+             'outside_masked_lpips', 'outside_psnr', 'outside_ssim', 'full_lpips_to_target')
+    metrics = {name: finite_mean(r['metrics'].get(name) for r in evaluation['per_sample_after_seed_mean'])
+               for name in names}
+    row = {'step': train_row['global_step'], 'train_ce': train_row.get('epoch_train_ce_mean', train_row['sample_mean_ce']),
+           **metrics}
+    history = sorted([r for r in history if r['step'] != row['step']] + [row], key=lambda r: r['step'])
+    recent = history[-3:]
+    valid = len(recent) == 3 and all(r['train_ce'] is not None and r['inside_masked_lpips'] is not None for r in recent)
+    overfit = valid and all(a['train_ce'] > b['train_ce'] and a['inside_masked_lpips'] < b['inside_masked_lpips']
+                           for a, b in zip(recent, recent[1:]))
+    path.write_text(json.dumps({'status': 'DIAGNOSTIC_ONLY', 'POSSIBLE_OVERFIT': 'YES' if overfit else 'UNCLEAR',
+                                'automatic_selection': False, 'checkpoints': history}, indent=2) + '\n')

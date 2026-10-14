@@ -1,0 +1,25 @@
+extends: dense_magicbrush_4a800_10epoch.yaml
+experiment: Dense-SFT-Mixed30K-Epoch7-Continuation-4A800
+experiment_mode: mixed30k_epoch7_continuation
+world_size: 4
+epochs: 5
+max_optimizer_steps: 12120
+scheduler_horizon_steps: 12120
+checkpoint_steps: [2424, 4848, 7272, 9696, 12120]
+initial_dense_checkpoint: ${PREVIOUS_EXPERIMENT_ROOT}/sft/train/checkpoint-3843
+output_dir: ${MIXED_EXPERIMENT_ROOT}/sft/train
+continuation:
+  weights_only: true
+  optimizer_inherited: false
+  previous_sft_epoch: 7
+  additional_epochs: 5
+data:
+  name: fixed_mixed30k_plus_magicbrush
+  expected_rows: 38784
+  manifest: ${MIXED_EXPERIMENT_ROOT}/data/train_38784.jsonl
+  corpus_ready: ${MIXED_EXPERIMENT_ROOT}/data/MIXED_READY.json
+  roots:
+    magicbrush: ${PREVIOUS_EXPERIMENT_ROOT}/data/train
+    crispedit: ${MIXED_EXPERIMENT_ROOT}/data/materialized/crispedit
+    scaleedit: ${MIXED_EXPERIMENT_ROOT}/data/materialized/scaleedit
+    interedit: ${MIXED_EXPERIMENT_ROOT}/data/materialized/interedit

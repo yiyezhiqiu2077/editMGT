@@ -1,0 +1,7 @@
+extends: e3_base.yaml
+output_dir: ${MINI_OUTPUT_ROOT}/e3-mini512-curve-256
+data:
+  repeat_to_optimizer_steps: true
+max_optimizer_steps: 256
+scheduler_horizon_steps: 256
+checkpoint_steps: [0, 16, 32, 64, 128, 256]

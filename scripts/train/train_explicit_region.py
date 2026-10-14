@@ -21,6 +21,11 @@ import sys
 # Required by deterministic CUDA GEMM when torch deterministic algorithms are
 # enabled. It must be set before the first CUDA context is initialized.
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+# Pin the collective implementation so independent 8-GPU launches reduce
+# gradients in the same order.  Automatic NCCL algorithm/protocol selection is
+# numerically valid but need not be bitwise reproducible across launches.
+os.environ.setdefault("NCCL_ALGO", "Ring")
+os.environ.setdefault("NCCL_PROTO", "Simple")
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -36,25 +41,32 @@ from src.dataset_utils import encode_prompt, tokenize_prompt
 from src.explicit_region.checkpoint import (
     load_resume_state,
     load_trainable_state,
+    read_resume_state,
     save_resume_state,
     save_trainable_state,
 )
 from src.explicit_region.config import load_config
-from src.explicit_region.contracts import audit_trainable_parameters, freeze_modules
+from src.explicit_region.contracts import (
+    audit_trainable_parameters, configure_region_trainability, freeze_modules,
+)
 from src.explicit_region.contracts import sha256_file
 from src.explicit_region.corruption import prepare_corruption
 from src.explicit_region.deterministic import stable_seed
 from src.explicit_region.dataset import (
     DeterministicCoreDataset, InterEditArchiveDataset, MagicBrushAlignedDataset,
 )
-from src.explicit_region.epoch_sampler import DeterministicEpochSampler, SAMPLER_SCHEMA_VERSION
-from src.explicit_region.fixed_corpus import verify_corpus_ready
-from src.explicit_region.fixed_dataset import FixedCorpusDataset
+from src.explicit_region.epoch_sampler import (
+    DeterministicEpochSampler, EpochConsumptionTracker, MultiEpochFixedLoader,
+    SAMPLER_SCHEMA_VERSION,
+)
+from src.explicit_region.fixed_corpus import verify_corpus_ready, verify_mini_corpus_ready
+from src.explicit_region.fixed_dataset import FixedCorpusDataset, RepeatedFixedCorpusDataset
 from src.explicit_region.losses import per_sample_cross_entropy
 from src.explicit_region.masks import pixel_mask_to_token_mask
 from src.explicit_region.modeling import load_released_components
 from src.explicit_region.quality import QualityGate
 from src.explicit_region.validation import run_validation
+from src.explicit_region.validation import record_periodic_diagnostic
 from src.transformer import get_text_encoder_length
 from src.v2_utils import prepare_cond_token
 
@@ -114,7 +126,15 @@ def write_provenance(output: Path, config_path: str, config: dict, warm_start=No
         "config_sha256": sha256_file(config_path), "resolved_config": config,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+        "nccl_algo": os.environ.get("NCCL_ALGO"),
+        "nccl_proto": os.environ.get("NCCL_PROTO"),
         "torch_compile": False,
+        "distributed_reduction": {
+            "nccl_algo": os.environ.get("NCCL_ALGO"),
+            "nccl_proto": os.environ.get("NCCL_PROTO"),
+            "resume_bucket_priming": True,
+        },
+        "attention_backend": "math_sdp",
     }
     if warm_start:
         parent = Path(warm_start).resolve()
@@ -177,17 +197,25 @@ def fingerprint_payload(config: dict, identity: dict) -> dict:
         "optimizer": config["optimizer"],
         "scheduler_horizon_steps": config["scheduler_horizon_steps"],
         "warmup_steps": config["warmup_steps"],
+        "epochs": config.get("epochs", 1),
         "precision": config["precision"],
         "component_dtypes": config["component_dtypes"],
         "world_size": int(os.environ.get("WORLD_SIZE", "1")),
         "per_device_batch": config["batch_per_gpu"],
         "gradient_accumulation": config["gradient_accumulation"],
         "sampler_schema": (
-            SAMPLER_SCHEMA_VERSION if config["data"]["name"] == "fixed_200k"
+            SAMPLER_SCHEMA_VERSION
+            if config["data"]["name"] in ("fixed_200k", "fixed_corpus_dev")
             else "stateless-global-index-v1"
         ),
         "loss": "per_sample_normalized_ce",
         "torch_compile": False,
+        "distributed_reduction": {
+            "nccl_algo": os.environ.get("NCCL_ALGO"),
+            "nccl_proto": os.environ.get("NCCL_PROTO"),
+            "resume_bucket_priming": True,
+        },
+        "attention_backend": "math_sdp",
         "uv_lock_sha256": repo["uv_lock_sha256"],
         "git_sha": repo["git_sha"],
         "git_dirty_diff_sha256": repo["git_dirty_diff_sha256"],
@@ -221,6 +249,14 @@ def tensor_norm(parameters, *, gradients=False) -> float:
         if value is not None:
             total += value.detach().double().square().sum()
     return float(total.sqrt())
+
+
+def step_update_scheduler(accelerator, scheduler) -> bool:
+    """Advance exactly once after a successful optimizer update boundary."""
+    if not accelerator.sync_gradients or accelerator.optimizer_step_was_skipped:
+        return False
+    scheduler.step()
+    return True
 
 
 def prepare_batch(batch, components, accelerator, config, *, scope: str):
@@ -330,6 +366,9 @@ def main() -> None:
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_math_sdp(True)
     torch.use_deterministic_algorithms(True)
     if config.get("torch_compile", False):
         raise SystemExit("torch_compile is forbidden by v1 correctness contract")
@@ -338,6 +377,7 @@ def main() -> None:
     accelerator = Accelerator(
         gradient_accumulation_steps=config["gradient_accumulation"],
         mixed_precision=config["precision"],
+        step_scheduler_with_optimizer=False,
     )
     if accelerator.is_main_process:
         write_provenance(output, args.config, config, args.warm_start)
@@ -373,7 +413,9 @@ def main() -> None:
             target_modules=targets,
         )
     )
-    components.transformer.edit_region_embedding.requires_grad_(True)
+    region_active = configure_region_trainability(
+        components.transformer, config["corruption"]
+    )
     if args.warm_start:
         load_trainable_state(components.transformer, args.warm_start)
     components.transformer.train()
@@ -402,6 +444,7 @@ def main() -> None:
         },
         optimizer,
         output / "trainable_parameter_report.json" if accelerator.is_main_process else None,
+        region_conditioning_active=region_active,
     )
     payload = fingerprint_payload(config, components.identity)
     initial_cursor = 0
@@ -413,6 +456,10 @@ def main() -> None:
     )
     fixed_sampler = None
     current_epoch = 0
+    loader_generator = torch.Generator(device="cpu")
+    loader_generator.manual_seed(
+        stable_seed(config["seed"], 0, "data-loader", "worker-seed")
+    )
     if config["data"]["name"] == "magicbrush":
         dataset = MagicBrushAlignedDataset(config["data"]["manifest"], **dataset_kwargs)
     elif config["data"]["name"] == "core":
@@ -434,10 +481,17 @@ def main() -> None:
             interedit, magicbrush, interedit_weight=0.8,
             length=required_samples, base_seed=config["seed"],
         )
-    elif config["data"]["name"] == "fixed_200k":
-        ready = verify_corpus_ready(config["data"]["corpus_ready"])
-        if int(ready.get("total_rows", -1)) != 200000:
-            raise RuntimeError("CORPUS_NOT_READY: attestation total_rows must equal 200000")
+    elif config["data"]["name"] in ("fixed_200k", "fixed_corpus_dev"):
+        if config["data"]["name"] == "fixed_200k":
+            expected_rows = 200000
+            ready = verify_corpus_ready(config["data"]["corpus_ready"])
+            if int(ready.get("total_rows", -1)) != expected_rows:
+                raise RuntimeError("CORPUS_NOT_READY: attestation total_rows must equal 200000")
+        else:
+            expected_rows = int(config["data"]["expected_rows"])
+            ready = verify_mini_corpus_ready(
+                config["data"]["corpus_ready"], expected_rows=expected_rows
+            )
         dataset = FixedCorpusDataset(
             config["data"]["manifest"], config["data"]["roots"],
             resolution=config["resolution"], base_seed=config["seed"],
@@ -445,15 +499,25 @@ def main() -> None:
             max_random_attempts=config["geometry"]["max_resample_attempts"],
             minimum_mask_retention=config["geometry"]["minimum_mask_retention"],
         )
-        if len(dataset) != 200000:
-            raise RuntimeError(f"fixed corpus must have 200000 rows, got {len(dataset)}")
+        if len(dataset) != expected_rows:
+            raise RuntimeError(
+                f"fixed corpus must have {expected_rows} rows, got {len(dataset)}"
+            )
+        if config["data"].get("repeat_to_optimizer_steps", False):
+            required_samples = (
+                config["max_optimizer_steps"] * config["batch_per_gpu"]
+                * config["gradient_accumulation"] * accelerator.num_processes
+            )
+            dataset = RepeatedFixedCorpusDataset(dataset, required_samples)
     else:
         raise ValueError(f"unsupported data recipe: {config['data']['name']}")
     if args.resume:
-        metadata = torch.load(Path(args.resume) / "training_state.pt", map_location="cpu")
+        metadata = read_resume_state(
+            args.resume, fingerprint_payload=payload, world_size=accelerator.num_processes
+        )
         initial_cursor = int(metadata["committed_global_sample_count"])
         initial_step = int(metadata["global_optimizer_step"])
-    if config["data"]["name"] == "fixed_200k":
+    if config["data"]["name"] in ("fixed_200k", "fixed_corpus_dev"):
         if args.resume:
             sampler_state = metadata.get("sampler_state", {})
             expected = {
@@ -479,9 +543,16 @@ def main() -> None:
         )
         if args.resume and fixed_sampler.epoch_permutation_sha256 != sampler_state["epoch_permutation_sha256"]:
             raise RuntimeError("RESUME_FINGERPRINT_MISMATCH epoch permutation")
-        loader = DataLoader(
-            dataset, sampler=fixed_sampler, batch_size=config["batch_per_gpu"],
+        if initial_cursor != current_epoch * len(dataset) + samples_in_epoch:
+            raise RuntimeError("RESUME_FINGERPRINT_MISMATCH global/epoch sample cursor")
+        global_batch = config["batch_per_gpu"] * accelerator.num_processes * config["gradient_accumulation"]
+        if len(dataset) % global_batch:
+            raise RuntimeError("fixed epoch must contain whole optimizer updates without padding")
+        loader = MultiEpochFixedLoader(
+            dataset, fixed_sampler, epochs=config.get("epochs", 1),
+            batch_size=config["batch_per_gpu"],
             num_workers=config.get("num_workers", 0), pin_memory=True,
+            generator=loader_generator,
         )
         components.transformer, optimizer, scheduler = accelerator.prepare(
             components.transformer, optimizer, scheduler
@@ -493,6 +564,7 @@ def main() -> None:
         loader = DataLoader(
             Subset(dataset, indices), batch_size=config["batch_per_gpu"], shuffle=False,
             num_workers=config.get("num_workers", 0), pin_memory=True,
+            generator=loader_generator,
         )
         components.transformer, optimizer, loader, scheduler = accelerator.prepare(
             components.transformer, optimizer, loader, scheduler
@@ -502,12 +574,30 @@ def main() -> None:
     components.llm_encoder.to(accelerator.device, dtype=dtype)
     components.vqvae.to(accelerator.device, dtype=torch.float32)
     if args.resume:
+        # DDP learns the gradient-ready order on its first backward and rebuilds
+        # buckets before the next forward.  A newly launched resume process has
+        # not reached that state, while a continuous run has.  Prime the reducer
+        # once, then restore every trainable/optimizer/RNG state below so the
+        # first committed resumed update uses the same bucket topology.
+        if initial_step >= config['max_optimizer_steps']:
+            raise RuntimeError('resume checkpoint already reaches the requested training budget')
+        loader_generator_state = loader_generator.get_state()
+        priming_batch = next(iter(loader))
+        optimizer.zero_grad(set_to_none=True)
+        with accelerator.autocast():
+            priming_loss, _, _, _ = prepare_batch(
+                priming_batch, components, accelerator, config, scope=config["lora"]["scope"]
+            )
+        accelerator.backward(priming_loss)
+        optimizer.zero_grad(set_to_none=True)
+        loader_generator.set_state(loader_generator_state)
         resumed_state = load_resume_state(
             args.resume,
             model=accelerator.unwrap_model(components.transformer),
             optimizer=optimizer,
             scheduler=scheduler,
             fingerprint_payload=payload,
+            state=metadata,
         )
     else:
         resumed_state = None
@@ -543,6 +633,41 @@ def main() -> None:
     pending_sample_uids, pending_dataset_names, pending_edit_types = [], [], []
     pending_geometry_seeds, pending_corruption_seeds, pending_modes = [], [], []
     pending_dropout = 0
+    pending_sample_losses = []
+    epoch_tracker = (
+        EpochConsumptionTracker(dataset.rows, fixed_sampler, config["batch_per_gpu"], config["gradient_accumulation"],
+                                metadata.get("sampler_state", {}) if args.resume else None)
+        if fixed_sampler is not None and not config["data"].get("repeat_to_optimizer_steps", False)
+        else None
+    )
+    if not args.resume and global_step == 0 and 0 in set(config.get("checkpoint_steps", [])):
+        accelerator.wait_for_everyone()
+        save_resume_state(
+            output / "checkpoint-0",
+            model=accelerator.unwrap_model(components.transformer),
+            optimizer=optimizer,
+            scheduler=scheduler,
+            global_optimizer_step=0,
+            committed_global_sample_count=0,
+            sampler_schema=(
+                SAMPLER_SCHEMA_VERSION if fixed_sampler is not None
+                else "stateless-global-index-v1"
+            ),
+            fingerprint_payload=payload,
+            quality_state=quality_gate.state_dict(),
+            sampler_state=(
+                {
+                    **fixed_sampler.state_dict(),
+                    "global_optimizer_step_in_epoch": 0,
+                    "global_microbatch_in_epoch": 0,
+                    "samples_consumed_in_epoch": 0,
+                    "batch_per_gpu": config["batch_per_gpu"],
+                    "gradient_accumulation": config["gradient_accumulation"],
+                    **(epoch_tracker.state_dict() if epoch_tracker is not None else {}),
+                }
+                if fixed_sampler is not None else None
+            ),
+        )
     torch.cuda.reset_peak_memory_stats(accelerator.device)
     for batch in loader:
         with accelerator.accumulate(components.transformer):
@@ -553,6 +678,7 @@ def main() -> None:
             batch_keys = list(batch.get("sample_uid", batch["sample_key"]))
             batch_indices = [int(value) for value in batch["global_sample_index"]]
             pending_sample_uids.extend(str(value) for value in batch_keys)
+            pending_sample_losses.extend([float(loss.detach())] * len(batch_keys))
             pending_dataset_names.extend(str(value) for value in batch["dataset_name"])
             pending_edit_types.extend(str(value) for value in batch["edit_type"])
             if "geometry_seed" in batch:
@@ -583,22 +709,31 @@ def main() -> None:
                 if capture_diagnostic else None
             )
             mask_grad = accelerator.unwrap_model(components.transformer).edit_region_embedding.grad
+            frozen_base_gradient_nonzero = sum(
+                int(bool(parameter.grad.detach().ne(0).any()))
+                for parameter in components.transformer.parameters()
+                if not parameter.requires_grad and parameter.grad is not None
+            )
             current_mask_grad = (
                 float(mask_grad.float().norm()) if capture_diagnostic and mask_grad is not None else None
             )
             applied_learning_rate = float(optimizer.param_groups[0]["lr"])
             optimizer.step()
-            if accelerator.sync_gradients:
-                scheduler.step()
+            update_succeeded = step_update_scheduler(accelerator, scheduler)
             optimizer.zero_grad(set_to_none=True)
         if not accelerator.sync_gradients:
             continue
+        if not update_succeeded:
+            raise FloatingPointError("optimizer update was skipped; no samples committed")
         committed_sample_uids = list(gather_object(pending_sample_uids))
         committed_dataset_names = list(gather_object(pending_dataset_names))
         committed_edit_types = list(gather_object(pending_edit_types))
         committed_geometry_seeds = list(gather_object(pending_geometry_seeds))
         committed_corruption_seeds = list(gather_object(pending_corruption_seeds))
         committed_modes = list(gather_object(pending_modes))
+        committed_sample_losses = list(gather_object(pending_sample_losses))
+        pending_sample_losses.clear()
+        epoch_audit = epoch_tracker.commit(committed_sample_uids, committed_sample_losses) if epoch_tracker is not None else {}
         committed_dropout = sum(gather_object([pending_dropout]))
         pending_sample_uids.clear(); pending_dataset_names.clear(); pending_edit_types.clear()
         pending_geometry_seeds.clear(); pending_corruption_seeds.clear(); pending_modes.clear()
@@ -609,6 +744,11 @@ def main() -> None:
             for parameter, before in zip(trainable, before_update)
         ))
         parameter_norm = tensor_norm(trainable)
+        region_parameter = accelerator.unwrap_model(components.transformer).edit_region_embedding
+        region_before = next(before for parameter, before in zip(trainable, before_update)
+                             if parameter is region_parameter) if region_parameter.requires_grad else None
+        region_update_squared = (float((region_parameter.detach().double() - region_before.double()).square().sum())
+                                 if region_before is not None else 0.0)
         update_ratio = update_norm / max(parameter_norm, 1e-12)
         finite_parameters = all(bool(torch.isfinite(parameter).all()) for parameter in trainable)
         dataset_counts.update(committed_dataset_names)
@@ -618,7 +758,10 @@ def main() -> None:
             config["batch_per_gpu"] * accelerator.num_processes * config["gradient_accumulation"]
         )
         row = {
+            **epoch_audit,
             "global_step": global_step,
+            "optimizer_updates": global_step,
+            "scheduler_updates": int(scheduler.state_dict()["last_epoch"]),
             "committed_global_sample_count": committed,
             "sample_mean_ce": float(loss.detach()),
             "token_mean_ce": float(token_mean.detach()),
@@ -633,10 +776,13 @@ def main() -> None:
             "peak_vram_bytes": torch.cuda.max_memory_allocated(accelerator.device),
             "peak_reserved_vram_bytes": torch.cuda.max_memory_reserved(accelerator.device),
             "grad_norm_pre_clip": grad_norm_pre,
+            "frozen_base_gradient_nonzero": frozen_base_gradient_nonzero,
             "grad_norm_post_clip": grad_norm_post,
             "clip_applied": grad_norm_pre > clip_threshold,
             "parameter_norm": parameter_norm,
+            "region_embedding_norm": float(accelerator.unwrap_model(components.transformer).edit_region_embedding.detach().float().norm()),
             "optimizer_update_norm": update_norm,
+            "lora_update_norm": math.sqrt(max(0.0, update_norm ** 2 - region_update_squared)),
             "update_ratio": update_ratio,
             "max_abs_logit": corruption.max_abs_logit,
             "finite_parameters": finite_parameters,
@@ -668,6 +814,9 @@ def main() -> None:
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
             print(json.dumps(row, sort_keys=True), flush=True)
+            if epoch_audit.get("epoch_boundary"):
+                with (output / "epoch_boundaries.jsonl").open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(row, sort_keys=True) + "\n")
             (output / "quality_status.json").write_text(
                 json.dumps(quality_gate.state_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
@@ -680,41 +829,42 @@ def main() -> None:
         )
         if global_step in set(config.get("checkpoint_steps", [])) or validation_due:
             accelerator.wait_for_everyone()
-            if accelerator.is_main_process:
-                save_resume_state(
-                    output / f"checkpoint-{global_step}",
-                    model=accelerator.unwrap_model(components.transformer),
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    global_optimizer_step=global_step,
-                    committed_global_sample_count=committed,
-                    sampler_schema=(
-                        SAMPLER_SCHEMA_VERSION if fixed_sampler is not None
-                        else "stateless-global-index-v1"
-                    ),
-                    fingerprint_payload=payload,
-                    quality_state=quality_gate.state_dict(),
-                    sampler_state=(
-                        {
-                            **fixed_sampler.state_dict(),
-                            "global_optimizer_step_in_epoch": global_step,
-                            "global_microbatch_in_epoch": global_step * config["gradient_accumulation"],
-                            "samples_consumed_in_epoch": committed,
-                            "batch_per_gpu": config["batch_per_gpu"],
-                            "gradient_accumulation": config["gradient_accumulation"],
-                        }
-                        if fixed_sampler is not None else None
-                    ),
-                )
+            save_resume_state(
+                output / f"checkpoint-{global_step}",
+                model=accelerator.unwrap_model(components.transformer),
+                optimizer=optimizer,
+                scheduler=scheduler,
+                global_optimizer_step=global_step,
+                committed_global_sample_count=committed,
+                sampler_schema=(
+                    SAMPLER_SCHEMA_VERSION if fixed_sampler is not None
+                    else "stateless-global-index-v1"
+                ),
+                fingerprint_payload=payload,
+                quality_state=quality_gate.state_dict(),
+                sampler_state=(
+                    {
+                        **fixed_sampler.state_dict(),
+                        "global_optimizer_step_in_epoch": (committed - fixed_sampler.epoch * len(dataset)) // global_batch,
+                        "global_microbatch_in_epoch": (committed - fixed_sampler.epoch * len(dataset)) // (config["batch_per_gpu"] * accelerator.num_processes),
+                        "samples_consumed_in_epoch": committed - fixed_sampler.epoch * len(dataset),
+                        "batch_per_gpu": config["batch_per_gpu"],
+                        "gradient_accumulation": config["gradient_accumulation"],
+                        **(epoch_tracker.state_dict() if epoch_tracker is not None else {}),
+                    }
+                    if fixed_sampler is not None else None
+                ),
+            )
         if validation_due:
             accelerator.wait_for_everyone()
             if accelerator.is_main_process:
-                run_validation(
+                validation_result = run_validation(
                     components=components,
                     transformer=accelerator.unwrap_model(components.transformer),
                     train_config=config, step=global_step, output_dir=output,
                     device=accelerator.device,
                 )
+                record_periodic_diagnostic(output, row, validation_result)
             accelerator.wait_for_everyone()
         if global_step >= config["max_optimizer_steps"]:
             break
